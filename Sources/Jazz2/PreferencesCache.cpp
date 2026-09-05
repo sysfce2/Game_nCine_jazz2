@@ -1742,6 +1742,13 @@ namespace
 #endif
 
 		String hostName = Application::GetDeviceHostname();
+#if defined(WITH_LIBRETRO)
+		// The core has no system of its own, it runs inside whatever frontend loaded it - which is noted at the
+		// end of the system name below, the same way as Wine or Atmosphère
+		StringView systemSuffix = " (Libretro)"_s;
+#else
+		StringView systemSuffix = {};
+#endif
 
 #if defined(DEATH_TARGET_ANDROID)
 		auto sanitizeName = [](char* dst, std::size_t dstMaxLength, std::size_t& dstLength, StringView name, bool isBrand) {
@@ -1802,31 +1809,31 @@ namespace
 		}
 		deviceName[deviceNameLength] = '\0';
 
-		String deviceDesc = format("{}|Android {}|{}|2|{}", hostName, sdkVersion, deviceName, arch);
+		String deviceDesc = format("{}|Android {}{}|{}|2|{}", hostName, sdkVersion, systemSuffix, deviceName, arch);
 #elif defined(DEATH_TARGET_APPLE)
 		String appleVersion = Environment::GetAppleVersion();
-		String deviceDesc = format("{}|macOS {}||5|{}", hostName, appleVersion, arch);
+		String deviceDesc = format("{}|macOS {}{}||5|{}", hostName, appleVersion, systemSuffix, arch);
 #elif defined(DEATH_TARGET_EMSCRIPTEN)
-		String deviceDesc = format("{}|WASM||8|{}", hostName, arch);
+		String deviceDesc = format("{}|WASM{}||8|{}", hostName, systemSuffix, arch);
 #elif defined(DEATH_TARGET_SWITCH)
 		std::uint32_t switchVersion = Environment::GetSwitchVersion();
 		bool isAtmosphere = Environment::HasSwitchAtmosphere();
-		String deviceDesc = format("{}|Nintendo Switch {}.{}.{}{}||9|{}", hostName,
-			((switchVersion >> 16) & 0xFF), ((switchVersion >> 8) & 0xFF), (switchVersion & 0xFF), isAtmosphere ? " (Atmosphère)"_s : ""_s, arch);
+		String deviceDesc = format("{}|Nintendo Switch {}.{}.{}{}{}||9|{}", hostName,
+			((switchVersion >> 16) & 0xFF), ((switchVersion >> 8) & 0xFF), (switchVersion & 0xFF), isAtmosphere ? " (Atmosphère)"_s : ""_s, systemSuffix, arch);
 #elif defined(DEATH_TARGET_WII)
-		String deviceDesc = format("{}|Nintendo Wii||14|{}", hostName, arch);
+		String deviceDesc = format("{}|Nintendo Wii{}||14|{}", hostName, systemSuffix, arch);
 #elif defined(DEATH_TARGET_GAMECUBE)
-		String deviceDesc = format("{}|Nintendo GameCube||15|{}", hostName, arch);
+		String deviceDesc = format("{}|Nintendo GameCube{}||15|{}", hostName, systemSuffix, arch);
 #elif defined(DEATH_TARGET_3DS)
-		String deviceDesc = format("{}|Nintendo 3DS||19|{}", hostName, arch);
+		String deviceDesc = format("{}|Nintendo 3DS{}||19|{}", hostName, systemSuffix, arch);
 #elif defined(DEATH_TARGET_PS2)
-		String deviceDesc = format("{}|PlayStation 2||11|{}", hostName, arch);
+		String deviceDesc = format("{}|PlayStation 2{}||11|{}", hostName, systemSuffix, arch);
 #elif defined(DEATH_TARGET_PS3)
-		String deviceDesc = format("{}|PlayStation 3||12|{}", hostName, arch);
+		String deviceDesc = format("{}|PlayStation 3{}||12|{}", hostName, systemSuffix, arch);
 #elif defined(DEATH_TARGET_VITA)
-		String deviceDesc = format("{}|PlayStation Vita||10|{}", hostName, arch);
+		String deviceDesc = format("{}|PlayStation Vita{}||10|{}", hostName, systemSuffix, arch);
 #elif defined(DEATH_TARGET_PSP)
-		String deviceDesc = format("{}|PlayStation Portable||16|{}", hostName, arch);
+		String deviceDesc = format("{}|PlayStation Portable{}||16|{}", hostName, systemSuffix, arch);
 #elif defined(DEATH_TARGET_AMIGAOS) || defined(DEATH_TARGET_AMIGAOS4) || defined(DEATH_TARGET_MORPHOS)
 #	if defined(DEATH_TARGET_AMIGAOS)
 		StringView systemName = "AmigaOS 3.x"_s;
@@ -1835,14 +1842,14 @@ namespace
 #	else
 		StringView systemName = "MorphOS"_s;
 #	endif
-		String deviceDesc = format("{}|{}||13|{}", hostName, systemName, arch);
+		String deviceDesc = format("{}|{}{}||13|{}", hostName, systemName, systemSuffix, arch);
 #elif defined(DEATH_TARGET_UNIX)
 #	if defined(DEATH_TARGET_CLANG)
 		arch |= 0x100000;
 #	endif
 
 		String unixFlavor = Environment::GetUnixFlavor();
-		String deviceDesc = format("{}|{}||4|{}", hostName, unixFlavor.empty() ? "Unix"_s : StringView(unixFlavor), arch);
+		String deviceDesc = format("{}|{}{}||4|{}", hostName, unixFlavor.empty() ? "Unix"_s : StringView(unixFlavor), systemSuffix, arch);
 #elif defined(DEATH_TARGET_WINDOWS) || defined(DEATH_TARGET_WINDOWS_RT)
 #	if defined(DEATH_TARGET_CLANG)
 		arch |= 0x100000;
@@ -1858,15 +1865,15 @@ namespace
 			case DeviceType::Xbox: deviceType = "Xbox"; break;
 			default: deviceType = "Unknown"; break;
 		}
-		String deviceDesc = format("{}|Windows {}.{}.{} ({})||7|{}", hostName,
-			std::int32_t((osVersion >> 48) & 0xffffu), std::int32_t((osVersion >> 32) & 0xffffu), std::int32_t(osVersion & 0xffffffffu), deviceType, arch);
+		String deviceDesc = format("{}|Windows {}.{}.{} ({}){}||7|{}", hostName,
+			std::int32_t((osVersion >> 48) & 0xffffu), std::int32_t((osVersion >> 32) & 0xffffu), std::int32_t(osVersion & 0xffffffffu), deviceType, systemSuffix, arch);
 #	else
 		bool isWine = Environment::IsWine();
-		String deviceDesc = format(isWine ? "{}|Windows {}.{}.{} (Wine)||3|{}" : "{}|Windows {}.{}.{}||3|{}", hostName,
-			std::int32_t((osVersion >> 48) & 0xffffu), std::int32_t((osVersion >> 32) & 0xffffu), std::int32_t(osVersion & 0xffffffffu), arch);
+		String deviceDesc = format(isWine ? "{}|Windows {}.{}.{} (Wine){}||3|{}" : "{}|Windows {}.{}.{}{}||3|{}", hostName,
+			std::int32_t((osVersion >> 48) & 0xffffu), std::int32_t((osVersion >> 32) & 0xffffu), std::int32_t(osVersion & 0xffffffffu), systemSuffix, arch);
 #	endif
 #else
-		String deviceDesc = format("{}||||", hostName);
+		String deviceDesc = format("{}|{}|||", hostName, systemSuffix.trimmed());
 #endif
 		return toBase64Url(deviceDesc.begin(), deviceDesc.end());
 	}

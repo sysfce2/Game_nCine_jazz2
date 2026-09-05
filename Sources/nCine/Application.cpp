@@ -2541,14 +2541,17 @@ namespace nCine
 			flags |= 0x01;	// Elevated
 		}
 #		if defined(DEATH_TARGET_32BIT)
-		flags |= 0x40;	// Is32Bit
+		flags |= 0x40;		// Is32Bit
 #		endif
 #		if defined(DEATH_TARGET_BIG_ENDIAN)
-		flags |= 0x80;	// IsBigEndian
+		flags |= 0x80;		// IsBigEndian
+#		endif
+#		if defined(WITH_LIBRETRO)
+		flags |= 0x4000;	// IsHosted
 #		endif
 		// Always reported, even for UTC itself - the flag is what tells a header that knows its timezone from one
 		// written before there was a field for it, which the reader must not take for UTC
-		flags |= 0x08;	// HasTimeZoneOffset
+		flags |= 0x08;		// HasTimeZoneOffset
 
 #		if defined(DEATH_TARGET_WINDOWS_RT)
 		constexpr MetadataPlatform platform = MetadataPlatform::WindowsRT;

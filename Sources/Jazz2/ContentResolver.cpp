@@ -396,7 +396,17 @@ namespace Jazz2
 			}
 		}
 #	else
-		if (fs::DirectoryExists(_contentPath)) {
+		// The portable build and the DEB/RPM ship the very same executable, so the layout has to be told apart at run
+		// time: a `Content` directory next to it means an extracted portable copy, an installed package lives in
+		// "<prefix>/bin" and has none. Must be tested first, or a portable copy would use installed content instead.
+		String executablePath = fs::GetExecutablePath();
+		StringView localBase = fs::GetDirectoryName(executablePath);
+		String localContentPath = fs::CombinePath(localBase, "Content/"_s);
+		if (fs::DirectoryExists(localContentPath)) {
+			_contentPath = std::move(localContentPath);
+			_sourcePath = fs::CombinePath(localBase, "Source/"_s);
+			_cachePath = fs::CombinePath(localBase, "Cache/"_s);
+		} else if (fs::DirectoryExists(_contentPath)) {
 			// Shared Content exists, try to use standard XDG paths
 			auto localStorage = fs::GetLocalStorage();
 			if (!localStorage.empty()) {

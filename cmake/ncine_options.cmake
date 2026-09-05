@@ -367,6 +367,19 @@ else()
 		option(NCINE_BUILD_FLATPAK "Build Flatpak version of the game" OFF)
 		cmake_dependent_option(NCINE_ASSEMBLE_DEB "Assemble DEB package of the game" OFF "NOT NCINE_BUILD_FLATPAK" OFF)
 		cmake_dependent_option(NCINE_ASSEMBLE_RPM "Assemble RPM package of the game" OFF "NOT NCINE_BUILD_FLATPAK" OFF)
+
+		# A distribution package belongs under "/usr", the FHS and Debian Policy keep packages out of "/usr/local".
+		# CPack already defaults the DEB/RPM payload there, but `CMAKE_INSTALL_PREFIX` - baked into the executable
+		# as `NCINE_INSTALL_PREFIX` - defaults to "/usr/local", so the game searched where its package never wrote.
+		# Decided here because "ncine_installation.cmake" is included long after that compile definition is set.
+		if((NCINE_ASSEMBLE_DEB OR NCINE_ASSEMBLE_RPM) AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+			set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Install path prefix, prepended onto install directories" FORCE)
+		endif()
+
+		if(NCINE_ASSEMBLE_DEB OR NCINE_ASSEMBLE_RPM)
+			string(TOLOWER "${NCINE_APP}" _NCINE_LINUX_PACKAGE_DEFAULT)
+			set(NCINE_LINUX_PACKAGE "${_NCINE_LINUX_PACKAGE_DEFAULT}" CACHE STRING "Package name used for Linux install paths")
+		endif()
 	endif()
 endif()
 

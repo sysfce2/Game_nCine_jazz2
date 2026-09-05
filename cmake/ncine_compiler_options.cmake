@@ -197,42 +197,30 @@ else() # GCC and LLVM
 	#	target_compile_options(${NCINE_APP} PRIVATE -mclflushopt)
 	#endif()
 	
-	# Split debug symbols from the executable on Linux
+	# Split debug symbols from the binary on Linux
 	if(DEATH_DEBUG_SYMBOLS AND UNIX AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-		get_target_property(_targetPath ${NCINE_APP} RUNTIME_OUTPUT_DIRECTORY)
-		if(NOT _targetPath)
-			set(_targetPath ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-			if(NOT _targetPath)
-				set(_targetPath ${CMAKE_CURRENT_BINARY_DIR})
-			endif()
-		endif()
-		
-		get_target_property(_targetName ${NCINE_APP} RUNTIME_OUTPUT_NAME)
-		if(NOT _targetName)
-			get_target_property(_targetName ${NCINE_APP} OUTPUT_NAME)
-			if(NOT _targetName)
-				set(_targetName ${NCINE_APP})
-			endif()
-		endif()
-
 		set(_compressDebugSections "")
 		if(("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 5.1.0) OR
 		   ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 5.0.0))
 			set(_compressDebugSections "--compress-debug-sections=zlib")
 		endif()
-			
+
+		# `$<TARGET_FILE:>` rather than a path assembled from the output directory and the target name, which
+		# is not the resulting file at all when the target is a shared library. `--add-gnu-debuglink` records
+		# only the base name of what it is given, so it can be passed the full path as well.
+		set(_debugSymbolsFile "$<TARGET_FILE_DIR:${NCINE_APP}>/$<TARGET_FILE_BASE_NAME:${NCINE_APP}>.pdb")
 		add_custom_command(TARGET ${NCINE_APP} POST_BUILD
-			COMMAND ${CMAKE_OBJCOPY} --only-keep-debug ${_compressDebugSections} "${_targetPath}/${_targetName}" "${_targetPath}/${_targetName}.pdb"
-			COMMAND ${CMAKE_OBJCOPY} --strip-debug --strip-unneeded "${_targetPath}/${_targetName}"
-			COMMAND ${CMAKE_OBJCOPY} --add-gnu-debuglink="${_targetName}.pdb" "${_targetPath}/${_targetName}"
+			COMMAND ${CMAKE_OBJCOPY} --only-keep-debug ${_compressDebugSections} "$<TARGET_FILE:${NCINE_APP}>" "${_debugSymbolsFile}"
+			COMMAND ${CMAKE_OBJCOPY} --strip-debug --strip-unneeded "$<TARGET_FILE:${NCINE_APP}>"
+			COMMAND ${CMAKE_OBJCOPY} --add-gnu-debuglink="${_debugSymbolsFile}" "$<TARGET_FILE:${NCINE_APP}>"
 			COMMENT "Splitting symbols and generating debug info"
 		)
 
 		# Everything downstream of this has to know that the symbols live in a separate file now: it must be
-		# packaged next to the executable, and nothing may strip the executable again afterwards, because
+		# packaged next to the binary, and nothing may strip the binary again afterwards, because
 		# `strip --strip-all` also drops the ".gnu_debuglink" section that ties the two together (it is not
 		# an allocated section). See "ncine_strip_binaries.cmake" and "ncine_installation.cmake".
-		set(NCINE_DEBUG_SYMBOLS_FILE "${_targetPath}/${_targetName}.pdb")
+		set(NCINE_DEBUG_SYMBOLS_FILE "${_debugSymbolsFile}")
 	endif()
 
 	if(NCINE_WITH_TRACY)

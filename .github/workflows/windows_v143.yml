@@ -130,5 +130,5 @@ jobs:
     - name: 'Upload Package'
       uses: actions/upload-artifact@v7
       with:
-        name: Jazz2_Windows_${{ matrix.Platform }}_${{ matrix.ArchExts }}_${{ matrix.Backend }}${{ env.rhiSuffix }}_v143
+        name: Jazz2_Windows_${{ matrix.Platform }}_${{ matrix.ArchExts && format('{0}_', matrix.ArchExts) || '' }}${{ matrix.Backend }}${{ env.rhiSuffix }}_v143
         path: ./_package/

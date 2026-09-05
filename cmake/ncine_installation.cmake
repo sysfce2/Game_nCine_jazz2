@@ -91,6 +91,18 @@ elseif(EMSCRIPTEN)
 	endif()
 elseif(UNIX)
 	set(CPACK_GENERATOR TGZ)
+
+	# Everything CPack emits has to land where the executable was compiled to look for it, and that is
+	# `NCINE_INSTALL_PREFIX`, i.e. `CMAKE_INSTALL_PREFIX` (see "ncine_compiler_options.cmake"). Left alone, the DEB
+	# and RPM generators pick "/usr" as their payload prefix on their own while the archive generators use none at
+	# all, so neither necessarily agrees with the prefix inside the binary. Pin all of them to the one prefix that
+	# was actually compiled in - "ncine_options.cmake" is what settles on "/usr" for DEB and RPM builds.
+	set(CPACK_PACKAGING_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
+	if((NCINE_ASSEMBLE_DEB OR NCINE_ASSEMBLE_RPM) AND NOT (CMAKE_INSTALL_PREFIX STREQUAL "/usr"))
+		message(WARNING "Assembling a DEB/RPM with CMAKE_INSTALL_PREFIX=\"${CMAKE_INSTALL_PREFIX}\" instead of \"/usr\". "
+			"The package will be self-consistent, but it writes outside the hierarchy a distribution package is allowed to own.")
+	endif()
+
 	if(NCINE_ASSEMBLE_DEB OR NCINE_ASSEMBLE_RPM)
 		file(WRITE "${GENERATED_SOURCE_DIR}/package_description.txt" ${NCINE_APP_DESCRIPTION_FULL})
 		set(CPACK_PACKAGE_DESCRIPTION_FILE "${GENERATED_SOURCE_DIR}/package_description.txt")
