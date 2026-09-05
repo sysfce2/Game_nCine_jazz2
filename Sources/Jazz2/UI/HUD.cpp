@@ -224,7 +224,9 @@ namespace Jazz2::UI
 
 				OnDrawOverview(scopedView, adjustedScopedView, player);
 				
-				if DEATH_UNLIKELY(player->_playerType != PlayerType::Spectate) {
+				if DEATH_UNLIKELY(player->_playerType == PlayerType::Spectate) {
+					OnDrawSpectate(scopedView, adjustedScopedView, player);
+				} else {
 					OnDrawHealth(scopedView, adjustedScopedView, player);
 					OnDrawScore(scopedView, player);
 					OnDrawWeaponAmmo(adjustedScopedView, player);
@@ -547,6 +549,11 @@ namespace Jazz2::UI
 			_smallFont->DrawString(this, spectateText, charOffset, view.X + 10.0f, view.Y + 6.0f, FontLayer,
 							Alignment::TopLeft, Colorf(0.45f, 0.45f, 0.45f), 0.8f, 0.7f, 0.7f, 0.7f, 0.3f, 0.9f);
 		}
+	}
+
+	void HUD::OnDrawSpectate(const Rectf& view, const Rectf& adjustedView, Actors::Player* player)
+	{
+		// Nothing to show for a single-player spectator, see MpHUD for the multiplayer one
 	}
 
 	void HUD::OnDrawHealth(const Rectf& view, const Rectf& adjustedView, Actors::Player* player)

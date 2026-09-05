@@ -628,6 +628,17 @@ namespace Jazz2
 					ShowConsole();
 				}
 			}
+
+			// The open console suppresses every gameplay action (see PlayerActionHit()), so its on-screen keyboard
+			// toggle has to read the raw input state instead. It's the same button the menu uses for its text fields,
+			// so a player without a hardware keyboard can type commands and chat messages here as well.
+			if (_console->IsVisible() && theApplication().CanShowScreenKeyboard()) {
+				constexpr std::uint64_t ChangeWeaponBit = (1ull << (std::int32_t)PlayerAction::ChangeWeapon);
+				const auto& rawInput = _playerInputs[0];
+				if ((rawInput.PressedActions & ChangeWeaponBit) != 0 && (rawInput.PressedActionsLast & ChangeWeaponBit) == 0) {
+					_console->ToggleScreenKeyboard();
+				}
+			}
 #if defined(DEATH_DEBUG)
 			if (IsCheatingAllowed(nullptr) && PlayerActionPressed(nullptr, PlayerAction::ChangeWeapon) && PlayerActionHit(0, PlayerAction::Jump)) {
 				_cheatsUsed = true;

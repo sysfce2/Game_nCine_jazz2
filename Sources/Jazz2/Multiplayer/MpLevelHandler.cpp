@@ -119,7 +119,7 @@ namespace Jazz2::Multiplayer
 	// TODO: levelState is unused, it needs to be set after LevelState::InitialUpdatePending is processed
 	MpLevelHandler::MpLevelHandler(IRootController* root, NetworkManager* networkManager, MpLevelHandler::LevelState levelState, bool enableLedgeClimb)
 		: LevelHandler(root), _networkManager(networkManager), _updateTimeLeft(1.0f), _gameTimeLeft(0.0f),
-			_levelState(LevelState::InitialUpdatePending), _forceResyncPending(true), _enableSpawning(true), _enqueuedPlaylistChange(false), _lastSpawnedActorId(-1), _waitingForPlayerCount(0),
+			_levelState(LevelState::InitialUpdatePending), _forceResyncPending(true), _enableSpawning(true), _enqueuedPlaylistChange(false), _lastSpawnedActorId(-1), _spectateFollowActorId(SpectateFreeCamera), _waitingForPlayerCount(0),
 			_lastUpdated(0), _seqNumWarped(0), _suppressRemoting(false), _ignorePackets(false), _changingCharacterInLobby(false), _enableLedgeClimb(enableLedgeClimb),
 			_controllableExternal(true), _autoWeightTreasure(false), _activePoll(VoteType::None), _activePollTimeLeft(0.0f), _recalcPositionInRoundTime(0.0f),
 			_overtimeTimeLeft(0.0f), _overtimeStarted(false), _raceFinishedCount(0), _roundStartedFrames(0.0f),
@@ -653,12 +653,14 @@ namespace Jazz2::Multiplayer
 						// whole playlist instead of just advancing to the next entry (TotalPlayerPoints == 0 disables this)
 						bool hasChampion = false;
 						String championName;
+						Peer championPeerRef;
 						std::uint32_t championPoints = 0;
 						if (serverConfig.TotalPlayerPoints > 0) {
 							for (auto& [championPeer, peerDesc] : *_networkManager->GetPeers()) {
 								if (peerDesc->Points > championPoints) {
 									championPoints = peerDesc->Points;
 									championName = peerDesc->PlayerName;
+									championPeerRef = championPeer;
 									hasChampion = true;
 								}
 							}
@@ -669,7 +671,7 @@ namespace Jazz2::Multiplayer
 
 						if (hasChampion) {
 							ShowAlertToAllPlayers(_f("\n\n{} won the championship!", championName));
-							LOGW("Champion is {} ({} points)", championName, championPoints);
+							LOGW("Champion is \"{}\" [{}] ({} points)", championName, championPeerRef, championPoints);
 
 							if (auto* webhook = _networkManager->GetWebhook()) {
 								// Holding shared_ptr copies keeps the referenced player names alive once the peer
@@ -1615,7 +1617,7 @@ namespace Jazz2::Multiplayer
 					// The player is warped back to the start line, so their progress along the track starts over
 					peerDesc->RaceProgress = 0.0f;
 
-					LOGI("Player {} finished lap ({})", mpPlayer->_playerIndex, peerDesc->Laps);
+					LOGI("Player {} \"{}\" finished lap ({})", mpPlayer->_playerIndex, peerDesc->PlayerName, peerDesc->Laps);
 
 					if (auto* webhook = _networkManager->GetWebhook()) {
 						auto& serverConfig = _networkManager->GetServerConfiguration();
@@ -1624,7 +1626,7 @@ namespace Jazz2::Multiplayer
 
 					CheckGameEnds();
 				} else {
-					LOGW("Player {} attempted to increment laps twice in a row", mpPlayer->_playerIndex);
+					LOGW("Player {} \"{}\" attempted to increment laps twice in a row", mpPlayer->_playerIndex, peerDesc->PlayerName);
 				}
 			}
 
@@ -3149,6 +3151,11 @@ namespace Jazz2::Multiplayer
 		// Apply new spectating mode
 		peerDesc->IsSpectating = mode;
 
+		if (!peerDesc->RemotePeer && (mode & SpectateMode::Mask) == SpectateMode::None) {
+			// The local player stopped spectating, so drop whoever it was following
+			StopSpectateFollow();
+		}
+
 		if ((mode & SpectateMode::Mask) != SpectateMode::None) {
 			if (serverConfig.EnableFreeCamera) {
 				peerDesc->IsSpectating |= SpectateMode::FreeCamera;
@@ -3270,6 +3277,8 @@ namespace Jazz2::Multiplayer
 			_networkManager->SendTo(peerDesc->RemotePeer, NetworkChannel::Main, (std::uint8_t)ServerPacketType::PlayerSetProperty, packet5);
 		}
 
+		BroadcastPlayerSpectateState(ptr);
+
 		if ((mode & SpectateMode::Mask) == SpectateMode::None) {
 			// Player is now active again - apply game mode effects
 			ApplyGameModeToPlayer(serverConfig.GameMode, ptr);
@@ -3312,6 +3321,207 @@ namespace Jazz2::Multiplayer
 	bool MpLevelHandler::IsSpectateAvailable() const
 	{
 		return _networkManager->GetServerConfiguration().EnableSpectate;
+	}
+
+	void MpLevelHandler::CollectSpectateFollowCandidates(SmallVector<std::uint32_t, 0>& candidates) const
+	{
+		candidates.clear();
+
+		if (_isServer) {
+			for (auto* player : _players) {
+				auto peerDesc = static_cast<const MpPlayer*>(player)->GetPeerDescriptor();
+				if (peerDesc == nullptr || peerDesc->IsSpectating != SpectateMode::None) {
+					continue;
+				}
+				candidates.push_back(player->_playerIndex);
+			}
+		} else {
+			// The local player is the spectator itself, and it's not in _playerNames anyway
+			for (const auto& [actorId, playerName] : _playerNames) {
+				if (playerName.IsSpectating || actorId == _lastSpawnedActorId) {
+					continue;
+				}
+				if (_remoteActors.find(actorId) == _remoteActors.end()) {
+					continue;
+				}
+				candidates.push_back(actorId);
+			}
+		}
+
+		// Both sources are hash maps, so the order they come out in is arbitrary and would shuffle between frames -
+		// sort them, so pressing the button twice reliably lands on the same player
+		nCine::sort(candidates.begin(), candidates.end());
+	}
+
+	StringView MpLevelHandler::GetSpectateFollowPlayerName() const
+	{
+		if (_spectateFollowActorId == SpectateFreeCamera) {
+			return {};
+		}
+
+		if (_isServer) {
+			for (auto* player : _players) {
+				if (player->_playerIndex == _spectateFollowActorId) {
+					auto peerDesc = static_cast<const MpPlayer*>(player)->GetPeerDescriptor();
+					return (peerDesc != nullptr ? StringView(peerDesc->PlayerName) : StringView{});
+				}
+			}
+		} else {
+			auto it = _playerNames.find(_spectateFollowActorId);
+			if (it != _playerNames.end()) {
+				return it->second.Name;
+			}
+		}
+
+		return {};
+	}
+
+	std::uint8_t MpLevelHandler::GetSpectateFollowPlayerTeam() const
+	{
+		if (_spectateFollowActorId == SpectateFreeCamera) {
+			return 0;
+		}
+
+		if (_isServer) {
+			for (auto* player : _players) {
+				if (player->_playerIndex == _spectateFollowActorId) {
+					auto peerDesc = static_cast<const MpPlayer*>(player)->GetPeerDescriptor();
+					return (peerDesc != nullptr ? peerDesc->Team : (std::uint8_t)0);
+				}
+			}
+		} else {
+			auto it = _playerNames.find(_spectateFollowActorId);
+			if (it != _playerNames.end()) {
+				return it->second.Team;
+			}
+		}
+
+		return 0;
+	}
+
+	bool MpLevelHandler::TryGetSpectatablePlayerPos(std::uint32_t actorId, Vector2f& pos) const
+	{
+		if (_isServer) {
+			for (auto* player : _players) {
+				if ((std::uint32_t)player->_playerIndex != actorId) {
+					continue;
+				}
+				auto peerDesc = static_cast<const MpPlayer*>(player)->GetPeerDescriptor();
+				if (peerDesc != nullptr && peerDesc->IsSpectating == SpectateMode::None) {
+					pos = player->GetPos();
+					return true;
+				}
+				break;
+			}
+		} else {
+			auto it = _playerNames.find(actorId);
+			if (it != _playerNames.end() && !it->second.IsSpectating) {
+				auto it2 = _remoteActors.find(actorId);
+				if (it2 != _remoteActors.end()) {
+					pos = it2->second->GetPos();
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	bool MpLevelHandler::GetSpectateFollowPlayerPos(Vector2f& pos)
+	{
+		if (_spectateFollowActorId == SpectateFreeCamera) {
+			return false;
+		}
+		if (TryGetSpectatablePlayerPos(_spectateFollowActorId, pos)) {
+			return true;
+		}
+
+		// The followed player is gone - disconnected, crossed the finish line (race finishers are put into spectate
+		// mode) or started spectating itself. Move on to whoever is still playing rather than leaving the camera
+		// parked where they were; the free camera is only handed back when there is nobody left to watch.
+		std::uint32_t lostActorId = _spectateFollowActorId;
+		_spectateFollowActorId = SpectateFreeCamera;
+
+		SmallVector<std::uint32_t, 0> candidates;
+		CollectSpectateFollowCandidates(candidates);
+		for (std::uint32_t actorId : candidates) {
+			// The list is sorted, so this picks the one right after the lost player and wraps to the first
+			if (actorId > lostActorId && TryGetSpectatablePlayerPos(actorId, pos)) {
+				_spectateFollowActorId = actorId;
+				return true;
+			}
+		}
+		for (std::uint32_t actorId : candidates) {
+			if (TryGetSpectatablePlayerPos(actorId, pos)) {
+				_spectateFollowActorId = actorId;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	void MpLevelHandler::CycleSpectateFollow(std::int32_t direction)
+	{
+		SmallVector<std::uint32_t, 0> candidates;
+		CollectSpectateFollowCandidates(candidates);
+
+		std::int32_t count = (std::int32_t)candidates.size();
+		if (count == 0) {
+			_spectateFollowActorId = SpectateFreeCamera;
+			return;
+		}
+
+		// The free camera is one more step of the cycle, right after the last player, so a single button walks
+		// through everyone and then hands the camera back instead of trapping the spectator on the last player
+		std::int32_t current = count;
+		for (std::int32_t i = 0; i < count; i++) {
+			if (candidates[i] == _spectateFollowActorId) {
+				current = i;
+				break;
+			}
+		}
+
+		std::int32_t next = current + (direction >= 0 ? 1 : -1);
+		if (next > count) {
+			next = 0;
+		} else if (next < 0) {
+			next = count;
+		}
+
+		_spectateFollowActorId = (next == count ? SpectateFreeCamera : candidates[next]);
+	}
+
+	void MpLevelHandler::StopSpectateFollow()
+	{
+		_spectateFollowActorId = SpectateFreeCamera;
+	}
+
+	void MpLevelHandler::BroadcastPlayerSpectateState(const Actors::Multiplayer::MpPlayer* player)
+	{
+		if (!_isServer || _isLocalSession || player == nullptr) {
+			return;
+		}
+
+		auto peerDesc = player->GetPeerDescriptor();
+		if (peerDesc == nullptr) {
+			return;
+		}
+
+		// The owning peer is told separately (it also needs the FreeCamera flag), this only keeps everyone else's
+		// player list up to date so spectators are left out of the minimap and of the spectator follow cycle
+		MemoryStream packet(6);
+		packet.WriteValue<std::uint8_t>((std::uint8_t)PlayerPropertyType::Spectate);
+		packet.WriteVariableUint32(player->_playerIndex);
+		packet.WriteValue<std::uint8_t>((std::uint8_t)peerDesc->IsSpectating);
+
+		_networkManager->SendTo([this, self = peerDesc->RemotePeer](const Peer& peer) {
+			if (peer == self) {
+				return false;
+			}
+			auto peerDesc = _networkManager->GetPeerDescriptor(peer);
+			return (peerDesc && peerDesc->LevelState >= PeerLevelState::LevelSynchronized);
+		}, NetworkChannel::Main, (std::uint8_t)ServerPacketType::PlayerSetProperty, packet);
 	}
 
 	void MpLevelHandler::ShowCharacterSelectLobby()
@@ -3511,7 +3721,7 @@ namespace Jazz2::Multiplayer
 				floodPeerDesc->PacketRateCount++;
 				if (floodPeerDesc->PacketRateCount > MaxPacketsPerPeerPerSecond) {
 					if (floodPeerDesc->PacketRateCount == MaxPacketsPerPeerPerSecond + 1) {
-						LOGW("Peer {} exceeded the packet rate limit, dropping further packets this second", peer);
+						LOGW("Peer \"{}\" [{}] exceeded the packet rate limit, dropping further packets this second", floodPeerDesc->PlayerName, peer);
 					}
 					return true;
 				}
@@ -3848,7 +4058,7 @@ namespace Jazz2::Multiplayer
 #else
 		auto* _this = this;
 #endif
-			LOGI("Started streaming {} assets to peer [{}]", missingAssets.size(), peer);
+			LOGI("Started streaming {} assets to peer \"{}\" [{}]", missingAssets.size(), peerDesc->PlayerName, peer);
 			TimeStamp begin = TimeStamp::now();
 
 			for (std::uint32_t i = 0; i < (std::uint32_t)missingAssets.size(); i++) {
@@ -3894,8 +4104,8 @@ namespace Jazz2::Multiplayer
 				_this->_networkManager->SendTo(peer, NetworkChannel::Main, (std::uint8_t)ServerPacketType::StreamAsset, packetEnd);
 			}
 
-			LOGI("Finished streaming {} assets to peer [{}] - took {:.1f} ms",
-			missingAssets.size(), peer, begin.millisecondsSince());
+			LOGI("Finished streaming {} assets to peer \"{}\" [{}] - took {:.1f} ms",
+			missingAssets.size(), peerDesc->PlayerName, peer, begin.millisecondsSince());
 			if (peerDesc->IsAuthenticated && !_this->_ignorePackets) {
 				MemoryStream packet;
 				_this->InitializeLoadLevelPacket(packet);
@@ -3932,7 +4142,7 @@ namespace Jazz2::Multiplayer
 			peerDesc->PreferredTeam = preferredTeam;
 		}
 
-		LOGI("[MP] ClientPacketType::PlayerReady [{}] - type: {}, team: {}", peer, preferredPlayerType, preferredTeam);
+		LOGI("[MP] ClientPacketType::PlayerReady [{}] - name: \"{}\", type: {}, team: {}", peer, peerDesc->PlayerName, preferredPlayerType, preferredTeam);
 
 		InvokeAsync([this, peer]() {
 			auto peerDesc = _networkManager->GetPeerDescriptor(peer);
@@ -4008,19 +4218,22 @@ namespace Jazz2::Multiplayer
 			float acceptedSpeedX = speedX, acceptedSpeedY = speedY;
 			bool corrected = false;
 			if (std::abs(acceptedSpeedX) > MaxPlausibleSpeed || std::abs(acceptedSpeedY) > MaxPlausibleSpeed) {
-				LOGW("Clamped implausible speed from player {} ({:.1f}, {:.1f})", playerIndex, acceptedSpeedX, acceptedSpeedY);
+				LOGW("Clamped implausible speed from player {} \"{}\" ({:.1f}, {:.1f})", playerIndex, peerDesc->PlayerName, acceptedSpeedX, acceptedSpeedY);
 				acceptedSpeedX = std::clamp(acceptedSpeedX, -MaxPlausibleSpeed, MaxPlausibleSpeed);
 				acceptedSpeedY = std::clamp(acceptedSpeedY, -MaxPlausibleSpeed, MaxPlausibleSpeed);
 				corrected = true;
 			}
 
 			// Belt-and-suspenders: stale pre-warp updates are already dropped via the LastUpdated grace, so
-			// this only guards against desyncs after a warp was acknowledged
-			if (!remotePlayerOnServer->_justWarped) {
+			// this only guards against desyncs after a warp was acknowledged. A spectator's position is just its
+			// camera - it isn't simulated, isn't sent to anyone else and jumps across the level every time they
+			// lock onto another player, so there is nothing to cheat and nothing to check.
+			bool isSpectating = ((peerDesc->IsSpectating & SpectateMode::Mask) != SpectateMode::None);
+			if (!remotePlayerOnServer->_justWarped && !isSpectating) {
 				float stepDistSqr = (Vector2f(acceptedX, acceptedY) - remotePlayerOnServer->_pos).SqrLength();
 				if (stepDistSqr > maxStep * maxStep) {
-					LOGW("Rejected implausible teleport from player {} ({} px in one update, budget {} px)",
-						playerIndex, (std::int32_t)std::sqrt(stepDistSqr), (std::int32_t)maxStep);
+					LOGW("Rejected implausible teleport from player {} \"{}\" ({} px in one update, budget {} px)",
+						playerIndex, peerDesc->PlayerName, (std::int32_t)std::sqrt(stepDistSqr), (std::int32_t)maxStep);
 					acceptedX = remotePlayerOnServer->_pos.X;
 					acceptedY = remotePlayerOnServer->_pos.Y;
 					corrected = true;
@@ -4144,7 +4357,7 @@ namespace Jazz2::Multiplayer
 				return;
 			}
 
-			LOGI("Player {} [{}] {} spectating", playerIndex, peer, enable ? "started"_s : "stopped"_s);
+			LOGI("Player {} \"{}\" [{}] {} spectating", playerIndex, peerDesc->PlayerName, peer, enable ? "started"_s : "stopped"_s);
 			SetPlayerSpectateMode(peerDesc->Player, enable ? SpectateMode::Requested : SpectateMode::None);
 
 			if (enable) {
@@ -4187,7 +4400,7 @@ namespace Jazz2::Multiplayer
 				return;
 			}
 
-			LOGI("Player {} [{}] changing character to {}", playerIndex, peer, playerType);
+			LOGI("Player {} \"{}\" [{}] changing character to {}", playerIndex, peerDesc->PlayerName, peer, playerType);
 
 			// Respawn the player with the chosen character (also leaves spectate mode if currently spectating)
 			peerDesc->PreferredPlayerType = playerType;
@@ -4207,7 +4420,7 @@ namespace Jazz2::Multiplayer
 			return true;
 		}
 
-		LOGI("Player {} [{}] requesting team change to {}", peerDesc->Player->_playerIndex, peer, requestedTeam);
+		LOGI("Player {} \"{}\" [{}] requesting team change to {}", peerDesc->Player->_playerIndex, peerDesc->PlayerName, peer, requestedTeam);
 
 		InvokeAsync([this, peer, requestedTeam]() {
 			auto peerDesc = _networkManager->GetPeerDescriptor(peer);
@@ -4260,7 +4473,7 @@ namespace Jazz2::Multiplayer
 			Vector2f ackPos(posX, posY);
 			Vector2f acceptedPos = ackPos;
 			if ((ackPos - mpPlayer->_pos).SqrLength() > MaxAckDeviation * MaxAckDeviation) {
-				LOGW("Player {} acknowledged a warp at an unexpected position, keeping the authoritative one", playerIndex);
+				LOGW("Player {} \"{}\" acknowledged a warp at an unexpected position, keeping the authoritative one", playerIndex, peerDesc->PlayerName);
 				acceptedPos = mpPlayer->_pos;
 			}
 
@@ -5451,6 +5664,31 @@ namespace Jazz2::Multiplayer
 			return true;
 		}
 
+		// Spectate state is tracked for every player (not just the local one), because spectators are left out
+		// of the minimap and of the follow cycle another spectator steps through
+		if (propertyType == PlayerPropertyType::Spectate) {
+			SpectateMode spectateMode = (SpectateMode)packet.ReadValue<std::uint8_t>();
+
+			LOGD("[MP] ServerPacketType::PlayerSetProperty::Spectate - playerIndex: {}, mode: 0x{:.2x}", playerIndex, spectateMode);
+
+			InvokeAsync([this, playerIndex, spectateMode]() {
+				if (playerIndex == _lastSpawnedActorId) {
+					if (!_players.empty()) {
+						auto* player = static_cast<RemotablePlayer*>(_players[0]);
+						player->GetPeerDescriptor()->IsSpectating = spectateMode;
+					}
+					if ((spectateMode & SpectateMode::Mask) == SpectateMode::None) {
+						// Not spectating anymore, so drop whoever was being followed
+						StopSpectateFollow();
+					}
+				} else {
+					auto it = _playerNames.try_emplace(playerIndex, PlayerName{});
+					it.first->second.IsSpectating = ((spectateMode & SpectateMode::Mask) != SpectateMode::None);
+				}
+			});
+			return true;
+		}
+
 		// Shield drives a visible decoration for every player, so it is applied to the local player or
 		// to the matching RemoteActor; the server broadcasts it to all peers, not just the owner.
 		if (propertyType == PlayerPropertyType::Shield) {
@@ -5660,19 +5898,6 @@ namespace Jazz2::Multiplayer
 				InvokeAsync([this, duration]() {
 					if (!_players.empty()) {
 						ShakeCameraView(_players[0], duration);
-					}
-				});
-				break;
-			}
-			case PlayerPropertyType::Spectate: {
-				SpectateMode spectateMode = (SpectateMode)packet.ReadValue<std::uint8_t>();
-
-				LOGD("[MP] ServerPacketType::PlayerSetProperty::Spectate - mode: 0x{:.2x}", spectateMode);
-
-				InvokeAsync([this, spectateMode]() {
-					if (!_players.empty()) {
-						auto* player = static_cast<RemotablePlayer*>(_players[0]);
-						player->GetPeerDescriptor()->IsSpectating = spectateMode;
 					}
 				});
 				break;
@@ -7175,7 +7400,7 @@ namespace Jazz2::Multiplayer
 					peerDesc->LevelState = PeerLevelState::LevelSynchronized;
 				}
 
-				LOGI("Syncing peer [{}]", peer);
+				LOGI("Syncing peer \"{}\" [{}]", peerDesc->PlayerName, peer);
 
 				// Sync the game mode (incl. the team-coloring flag) to this peer BEFORE the remote actors below and
 				// before its own player spawns next tick (PlayerReady branch). The client decides at spawn time whether
@@ -7274,6 +7499,16 @@ namespace Jazz2::Multiplayer
 
 					_networkManager->SendTo(peer, NetworkChannel::Main, (std::uint8_t)ServerPacketType::MarkRemoteActorAsPlayer, packet2);
 
+					// Spectators are left out of the minimap and of the spectator follow cycle, which the joining
+					// peer can only tell from this (their actor exists like any other player's, it just never moves)
+					if (otherPeerDesc->IsSpectating != SpectateMode::None) {
+						MemoryStream packetSpectate(6);
+						packetSpectate.WriteValue<std::uint8_t>((std::uint8_t)PlayerPropertyType::Spectate);
+						packetSpectate.WriteVariableUint32(mpOtherPlayer->_playerIndex);
+						packetSpectate.WriteValue<std::uint8_t>((std::uint8_t)otherPeerDesc->IsSpectating);
+						_networkManager->SendTo(peer, NetworkChannel::Main, (std::uint8_t)ServerPacketType::PlayerSetProperty, packetSpectate);
+					}
+
 					// If this player currently has an active shield, sync it so the joining peer renders the
 					// decoration right away (shields are otherwise only broadcast when they change, which this
 					// late joiner missed). The CreateRemoteActor above is sent first, so the actor already exists.
@@ -7336,7 +7571,7 @@ namespace Jazz2::Multiplayer
 						? _lastCheckpointPos : GetSpawnPoint(peerDesc->PreferredPlayerType, peerDesc->Team));
 
 					std::uint8_t playerIndex = FindFreePlayerId();
-					LOGI("Spawning player {} [{}]", playerIndex, peer);
+					LOGI("Spawning player {} \"{}\" [{}]", playerIndex, peerDesc->PlayerName, peer);
 
 					std::shared_ptr<Actors::Multiplayer::RemotePlayerOnServer> player = std::make_shared<Actors::Multiplayer::RemotePlayerOnServer>(peerDesc);
 					// In team-coloring modes, resolve the team BEFORE activating so the spawn-time recolor decision
@@ -7494,7 +7729,7 @@ namespace Jazz2::Multiplayer
 					Vector2f spawnPosition = GetSpawnPoint(peerDesc->PreferredPlayerType, peerDesc->Team);
 
 					std::uint8_t playerIndex = FindFreePlayerId();
-					LOGI("Spawning player {} [{}] as spectator", playerIndex, peer);
+					LOGI("Spawning player {} \"{}\" [{}] as spectator", playerIndex, peerDesc->PlayerName, peer);
 
 					std::shared_ptr<Actors::Multiplayer::RemotePlayerOnServer> player = std::make_shared<Actors::Multiplayer::RemotePlayerOnServer>(peerDesc);
 					std::uint8_t playerParams[2] = { (std::uint8_t)PlayerType::Spectate, (std::uint8_t)playerIndex };
@@ -7565,6 +7800,8 @@ namespace Jazz2::Multiplayer
 						packet.WriteValue<std::uint8_t>((std::uint8_t)peerDesc->IsSpectating);
 						_networkManager->SendTo(peerDesc->RemotePeer, NetworkChannel::Main, (std::uint8_t)ServerPacketType::PlayerSetProperty, packet);
 					}
+
+					BroadcastPlayerSpectateState(ptr);
 				}
 			} else if (peerDesc->LevelState == PeerLevelState::PlayerSpawned) {
 				if DEATH_UNLIKELY(peerDesc->Player && peerDesc->JoinCooldownFrames > 0.0f) {
@@ -9470,7 +9707,7 @@ namespace Jazz2::Multiplayer
 		// The lap counter stamps the frame the last lap was completed, which is exactly the finishing time
 		peerDesc->RaceFinishFrames = peerDesc->LapsElapsedFrames;
 
-		LOGI("Player {} finished the race ({}.)", player->_playerIndex, peerDesc->RaceFinishOrder);
+		LOGI("Player {} \"{}\" finished the race ({}.)", player->_playerIndex, peerDesc->PlayerName, peerDesc->RaceFinishOrder);
 
 		if (!_overtimeStarted && serverConfig.OvertimeSecs > 0) {
 			// The first finisher doesn't end the round - everyone else gets this much time to complete their own laps
@@ -9758,7 +9995,7 @@ namespace Jazz2::Multiplayer
 		if (winner != nullptr) {
 			auto peerDesc = winner->GetPeerDescriptor();
 			ShowAlertToAllPlayers(_f("\n\nWinner is {}", peerDesc->PlayerName));
-			LOGW("Winner is {}", peerDesc->PlayerName);
+			LOGW("Winner is player {} \"{}\" [{}]", winner->_playerIndex, peerDesc->PlayerName, peerDesc->RemotePeer);
 		}
 
 		if (auto* webhook = _networkManager->GetWebhook()) {

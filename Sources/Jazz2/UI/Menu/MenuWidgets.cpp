@@ -40,7 +40,8 @@ namespace Jazz2::UI::Menu
 	{
 		Bounds = bounds;
 		float centerX = bounds.X + bounds.W * 0.5f;
-		float y = bounds.Y + LabelOffset;
+		// Half of whatever the compact view took off the row comes off the label's offset (see LabelOffset)
+		float y = bounds.Y + LabelOffset - (Height - bounds.H) * 0.5f;
 		root->DrawMenuListItem(charOffset, Label, centerX, y, Selected, Animation.Raw(), ReadOnly);
 		if (Value) {
 			StringView value = Value();
@@ -326,8 +327,18 @@ namespace Jazz2::UI::Menu
 		return false;
 	}
 
+	void ListContainer::UpdateLayoutTransition(IMenuContainer* root)
+	{
+		// Before the children are measured: the rows that size themselves by the view read this in GetHeight()
+		const float layoutTransition = MenuLayout::GetTransition(root->GetViewSize());
+		for (auto& child : _children) {
+			child->LayoutTransition = layoutTransition;
+		}
+	}
+
 	void StackLayout::Draw(IMenuContainer* root, Canvas* canvas, const Rectf& bounds, std::int32_t& charOffset)
 	{
+		UpdateLayoutTransition(root);
 		if (Spread) {
 			std::int32_t count = 0;
 			for (const auto& child : _children) {
@@ -433,6 +444,7 @@ namespace Jazz2::UI::Menu
 
 	void ScrollView::Draw(IMenuContainer* root, Canvas* canvas, const Rectf& bounds, std::int32_t& charOffset)
 	{
+		UpdateLayoutTransition(root);
 		_bandTop = bounds.Y;
 		_availableHeight = bounds.H;
 
@@ -622,7 +634,9 @@ namespace Jazz2::UI::Menu
 	{
 		Bounds = bounds;
 		float centerX = bounds.X + bounds.W * 0.5f;
-		float centerY = bounds.Y + LabelOffset;
+		// A fifth of whatever the compact view took off the row comes off the label's offset, the rest off the
+		// room under the bar: a compact row puts its label at 16, level with the compact ListItem rows
+		float centerY = bounds.Y + LabelOffset - (FullHeight - bounds.H) * 0.2f;
 
 		root->DrawMenuListItem(charOffset, Label, centerX, centerY, Selected, Animation.Raw());
 

@@ -1,5 +1,6 @@
 ﻿#include "Explosion.h"
 #include "../ILevelHandler.h"
+#include "../PreferencesCache.h"
 
 #include "../../nCine/Base/Random.h"
 
@@ -12,6 +13,21 @@ namespace Jazz2::Actors
 
 	void Explosion::Create(ILevelHandler* levelHandler, const Vector3i& pos, Type type, float scale)
 	{
+		// Smoke puffs are purely decorative, but they are spawned in bursts (a destroyed crate alone makes four),
+		// and each one is a full actor with its own animation and render command - drop them when the user turned
+		// particles off, the same as the debris produced by the tilemap
+		if (PreferencesCache::Particles == ParticleQuality::Off) {
+			switch (type) {
+				case Type::SmokeBrown:
+				case Type::SmokeGray:
+				case Type::SmokeWhite:
+				case Type::SmokePoof:
+					return;
+				default:
+					break;
+			}
+		}
+
 		std::shared_ptr<Explosion> explosion = std::make_shared<Explosion>();
 		std::uint8_t explosionParams[8];
 		EventParamsWriter writer(explosionParams);

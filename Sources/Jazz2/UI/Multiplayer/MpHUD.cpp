@@ -179,6 +179,37 @@ namespace Jazz2::UI::Multiplayer
 		auto* mpPlayer = static_cast<MpPlayer*>(player);
 		auto peerDesc = mpPlayer->GetPeerDescriptor();
 
+		if DEATH_UNLIKELY(player->GetPlayerType() == PlayerType::Spectate) {
+			bool isFollowing = (mpLevelHandler->GetSpectateFollowActorId() != MpLevelHandler::SpectateFreeCamera);
+			if (isFollowing) {
+				// Right after the "Spectating" label the base class draws, so it reads as one line: "Spectating <name>"
+				StringView followedName = mpLevelHandler->GetSpectateFollowPlayerName();
+				Colorf nameColor = (IsTeamGameMode(mpLevelHandler->_networkManager->GetServerConfiguration().GameMode)
+					? GetTeamColor(mpLevelHandler->GetSpectateFollowPlayerTeam())
+					: Colorf(0.62f, 0.44f, 0.34f, 0.5f));
+
+				float nameX = view.X + 10.0f + _smallFont->MeasureString(_("Spectating"), 0.8f, 0.9f).X + 8.0f;
+				_smallFont->DrawString(this, followedName, charOffsetShadow, nameX, view.Y + 6.0f + 2.0f, FontShadowLayer,
+					Alignment::TopLeft, Colorf(0.0f, 0.0f, 0.0f, 0.32f), 0.8f, 0.0f, 0.0f, 0.0f, 0.0f, 0.9f);
+				_smallFont->DrawString(this, followedName, charOffset, nameX, view.Y + 6.0f, FontLayer,
+					Alignment::TopLeft, nameColor, 0.8f, 0.0f, 0.0f, 0.0f, 0.0f, 0.9f);
+			}
+
+			// The second line is shared with the round-state texts drawn below, so the hint only takes it while the
+			// round is running and no overtime countdown is on it. The leaderboard starts another line further down.
+			if (mpLevelHandler->_levelState == MpLevelHandler::LevelState::Running && !mpLevelHandler->_overtimeStarted) {
+				auto hintText = (isFollowing
+					// TRANSLATORS: Spectator hint, "Fire" and "Run" are the names of the two actions
+					? _("Fire: next player, Run: free camera")
+					// TRANSLATORS: Spectator hint, "Fire" is the name of the action
+					: _("Fire: follow a player"));
+				_smallFont->DrawString(this, hintText, charOffsetShadow, view.X + 10.0f, view.Y + 20.0f + 1.0f, FontShadowLayer,
+					Alignment::TopLeft, Colorf(0.0f, 0.0f, 0.0f, 0.32f), 0.7f, 0.0f, 0.0f, 0.0f, 0.0f, 0.9f);
+				_smallFont->DrawString(this, hintText, charOffset, view.X + 10.0f, view.Y + 20.0f, FontLayer,
+					Alignment::TopLeft, Colorf(0.34f, 0.34f, 0.34f, 0.5f), 0.7f, 0.0f, 0.0f, 0.0f, 0.0f, 0.9f);
+			}
+		}
+
 		if (mpLevelHandler->_levelState == MpLevelHandler::LevelState::PreGame) {
 			float timeLeftSecs = mpLevelHandler->_gameTimeLeft / FrameTimer::FramesPerSecond;
 			std::int32_t minutes = std::max<std::int32_t>(0, (std::int32_t)(timeLeftSecs / 60));
@@ -266,6 +297,24 @@ namespace Jazz2::UI::Multiplayer
 		mpLevelHandler->DrawActiveGameModeHUD(*this, player, view);
 	}
 
+	void MpHUD::OnDrawSpectate(const Rectf& view, const Rectf& adjustedView, Actors::Player* player)
+	{
+		auto* mpLevelHandler = static_cast<MpLevelHandler*>(_levelHandler);
+
+		if DEATH_UNLIKELY(mpLevelHandler->_levelState != MpLevelHandler::LevelState::Running) {
+			return;
+		}
+
+		// A spectator has no score HUD of its own, but the leaderboard and the minimap are scaled the same way the
+		// players' HUD is (see OnDrawScore()), so they don't take over a small splitscreen viewport
+		_hudScale = (view.W < ViewSize.X - 1.0f || view.H < ViewSize.Y - 1.0f ? SplitscreenHudScale : 1.0f);
+
+		// Everything a spectator is here to watch: where everyone is, and who is winning. Both are drawn directly
+		// rather than through the game mode, whose part of the HUD describes a player that isn't in the round.
+		DrawMinimap(view, player);
+		DrawPositionInRound(view, player);
+	}
+
 	void MpHUD::DrawHudText(GameModeFontType font, StringView text, float x, float y, float shadowOffsetY,
 		Alignment alignment, const Colorf& color, float scale, float charSpacing,
 		float angleOffset, float variance, float speed)
@@ -301,10 +350,13 @@ namespace Jazz2::UI::Multiplayer
 		std::uint32_t PositionInRound;
 		std::uint32_t PointsInRound;
 		bool IsLocal;
+		// The row the point differences of all the other rows are measured against - the local player normally, the
+		// followed one while spectating. It's the same row as IsLocal unless a spectator is watching somebody.
+		bool IsReference;
 		std::uint8_t Team;
 
-		PositionInRoundItem(StringView playerName, std::uint32_t position, std::uint32_t points, bool isLocal, std::uint8_t team)
-			: PlayerName(playerName), PositionInRound(position), PointsInRound(points), IsLocal(isLocal), Team(team) {}
+		PositionInRoundItem(StringView playerName, std::uint32_t position, std::uint32_t points, bool isLocal, bool isReference, std::uint8_t team)
+			: PlayerName(playerName), PositionInRound(position), PointsInRound(points), IsLocal(isLocal), IsReference(isReference), Team(team) {}
 	};
 
 	void MpHUD::DrawPositionInRound(const Rectf& view, Actors::Player* player)
@@ -327,24 +379,40 @@ namespace Jazz2::UI::Multiplayer
 		SmallVector<PositionInRoundItem, 8> positions;
 		std::uint32_t localPoints = UINT32_MAX;
 
+		// A spectator has no place of its own to anchor the board on (unless it's a racer that already finished, who
+		// keeps its position), so it gets a few more of the leading players instead, and the point differences are
+		// measured against whoever it is watching
+		bool isSpectating = (player->GetPlayerType() == PlayerType::Spectate);
+		std::uint32_t followedActorId = (isSpectating ? mpLevelHandler->GetSpectateFollowActorId() : MpLevelHandler::SpectateFreeCamera);
+		bool isFollowing = (followedActorId != MpLevelHandler::SpectateFreeCamera);
+		std::uint32_t maxPosition = (isSpectating ? 6 : 3);
+
 		if (mpLevelHandler->_isServer) {
 			auto peers = mpLevelHandler->_networkManager->GetPeers();
 			for (const auto& [peer, peerDesc] : *peers) {
-				if ((peerDesc->PositionInRound >= 1 && peerDesc->PositionInRound <= 3) || !peerDesc->RemotePeer) {
-					if (!peerDesc->RemotePeer) {
+				bool isLocal = !peerDesc->RemotePeer;
+				bool isFollowed = (isFollowing && peerDesc->Player != nullptr && peerDesc->Player->GetPlayerIndex() == (std::int32_t)followedActorId);
+				bool isReference = (isFollowing ? isFollowed : isLocal);
+				bool isRanked = (peerDesc->PositionInRound >= 1 && peerDesc->PositionInRound <= maxPosition);
+				// The local row is always kept, except for a spectator that has no position to show there anyway
+				if (isRanked || isFollowed || (isLocal && (!isSpectating || peerDesc->PositionInRound >= 1))) {
+					if (isReference) {
 						localPoints = peerDesc->PointsInRound;
 					}
 
-					positions.emplace_back(peerDesc->PlayerName, peerDesc->PositionInRound, peerDesc->PointsInRound, !peerDesc->RemotePeer, peerDesc->Team);
+					positions.emplace_back(peerDesc->PlayerName, peerDesc->PositionInRound, peerDesc->PointsInRound, isLocal, isReference, peerDesc->Team);
 				}
 			}
 		} else {
 			for (const auto& pos : mpLevelHandler->_positionsInRound) {
-				if ((pos.PositionInRound >= 1 && pos.PositionInRound <= 3) || pos.ActorID == mpLevelHandler->_lastSpawnedActorId) {
+				bool isLocal = (pos.ActorID == mpLevelHandler->_lastSpawnedActorId);
+				bool isFollowed = (isFollowing && pos.ActorID == followedActorId);
+				bool isReference = (isFollowing ? isFollowed : isLocal);
+				bool isRanked = (pos.PositionInRound >= 1 && pos.PositionInRound <= maxPosition);
+				if (isRanked || isFollowed || (isLocal && (!isSpectating || pos.PositionInRound >= 1))) {
 					StringView playerName;
 					std::uint8_t team = 0;
-					if (pos.ActorID == mpLevelHandler->_lastSpawnedActorId) {
-						localPoints = pos.PointsInRound;
+					if (isLocal) {
 						auto localPeerDesc = mpLevelHandler->_networkManager->GetPeerDescriptor(LocalPeer);
 						playerName = localPeerDesc->PlayerName;
 						team = localPeerDesc->Team;
@@ -356,7 +424,11 @@ namespace Jazz2::UI::Multiplayer
 						}
 					}
 
-					positions.emplace_back(playerName, pos.PositionInRound, pos.PointsInRound, pos.ActorID == mpLevelHandler->_lastSpawnedActorId, team);
+					if (isReference) {
+						localPoints = pos.PointsInRound;
+					}
+
+					positions.emplace_back(playerName, pos.PositionInRound, pos.PointsInRound, isLocal, isReference, team);
 				}
 			}
 		}
@@ -385,18 +457,20 @@ namespace Jazz2::UI::Multiplayer
 			// In team modes the name is tinted with the player's team color (friend/foe cue); otherwise the local
 			// player's name uses the usual highlight and everyone else the default color
 			Colorf nameColor;
+			bool isHighlighted = (item.IsLocal || item.IsReference);
 			if (IsTeamGameMode(serverConfig.GameMode)) {
 				nameColor = GetTeamColor(item.Team);
-				nameColor.SetAlpha(item.IsLocal ? 0.9f : 0.7f);
+				nameColor.SetAlpha(isHighlighted ? 0.9f : 0.7f);
 			} else {
-				nameColor = (item.IsLocal ? Colorf(0.62f, 0.44f, 0.34f, 0.5f) : Font::DefaultColor);
+				nameColor = (isHighlighted ? Colorf(0.62f, 0.44f, 0.34f, 0.5f) : Font::DefaultColor);
 			}
 			_smallFont->DrawString(this, item.PlayerName, charOffsetShadow, view.X + 38.0f, view.Y + offset + 1.0f, FontShadowLayer,
 				Alignment::TopLeft, Colorf(0.0f, 0.0f, 0.0f, 0.32f), 0.8f, 0.0f, 0.0f, 0.0f, 0.0f, 0.9f);
 			_smallFont->DrawString(this, item.PlayerName, charOffset, view.X + 38.0f, view.Y + offset, FontLayer,
 				Alignment::TopLeft, nameColor, 0.8f, 0.0f, 0.0f, 0.0f, 0.0f, 0.9f);
 
-			if (!item.IsLocal) {
+			// Nothing to compare against while a spectator flies the camera around on its own
+			if (!item.IsReference && localPoints != UINT32_MAX) {
 				std::int64_t pointsDiff = (std::int64_t)item.PointsInRound - (std::int64_t)localPoints;
 				if (serverConfig.GameMode == MpGameMode::Race || serverConfig.GameMode == MpGameMode::TeamRace) {
 					pointsDiff = -pointsDiff / 16;
@@ -670,12 +744,29 @@ namespace Jazz2::UI::Multiplayer
 			DrawSolid(Vector2f(p.X - s * 0.5f, p.Y - s * 0.5f), MainLayer + 12, Vector2f(s, s), color);
 		};
 
+		// While spectating the highlight follows the camera - it marks whoever is being watched, and the free camera
+		// gets a marker of its own instead of a player dot, so it doesn't read as another player on the track
+		bool isSpectating = (player->GetPlayerType() == PlayerType::Spectate);
+		std::uint32_t followedActorId = (isSpectating ? mpLevelHandler->GetSpectateFollowActorId() : MpLevelHandler::SpectateFreeCamera);
+
+		auto drawCameraMarker = [&](Vector2f worldPos) {
+			Vector2f p = clampToBox(toMinimap(worldPos));
+			DrawSolid(Vector2f(p.X - 3.0f, p.Y - 3.0f), MainLayer + 10, Vector2f(6.0f, 6.0f), Colorf(0.0f, 0.0f, 0.0f, 0.5f));
+			DrawSolid(Vector2f(p.X - 2.0f, p.Y - 2.0f), MainLayer + 12, Vector2f(4.0f, 4.0f), Colorf(0.9f, 1.0f, 1.0f, 0.45f));
+			DrawSolid(Vector2f(p.X - 1.0f, p.Y - 1.0f), MainLayer + 14, Vector2f(2.0f, 2.0f), Colorf(0.0f, 0.0f, 0.0f, 0.5f));
+		};
+
 		if (mpLevelHandler->_isServer) {
 			auto peers = mpLevelHandler->_networkManager->GetPeers();
 			for (auto& [peer, peerDesc] : *peers) {
-				if (peerDesc->Player != nullptr) {
-					drawPlayerDot(peerDesc->Player->GetPos(), peerDesc->Player->GetPlayerIndex(), !peerDesc->RemotePeer, peerDesc->Team);
+				// A spectator's position is just its camera (and a race finisher's is wherever they crossed the
+				// line), so they are not on the track anymore and don't belong on the minimap
+				if (peerDesc->Player == nullptr || peerDesc->IsSpectating != SpectateMode::None) {
+					continue;
 				}
+				std::uint32_t actorId = (std::uint32_t)peerDesc->Player->GetPlayerIndex();
+				bool isHighlighted = (isSpectating ? (actorId == followedActorId) : !peerDesc->RemotePeer);
+				drawPlayerDot(peerDesc->Player->GetPos(), actorId, isHighlighted, peerDesc->Team);
 			}
 		} else {
 			// Local player is the currently viewed one
@@ -683,17 +774,23 @@ namespace Jazz2::UI::Multiplayer
 			if (auto localPeerDesc = mpLevelHandler->_networkManager->GetPeerDescriptor(LocalPeer)) {
 				localTeam = localPeerDesc->Team;
 			}
-			drawPlayerDot(player->GetPos(), mpLevelHandler->_lastSpawnedActorId, true, localTeam);
+			if (!isSpectating) {
+				drawPlayerDot(player->GetPos(), mpLevelHandler->_lastSpawnedActorId, true, localTeam);
+			}
 
 			for (auto& [actorId, playerName] : mpLevelHandler->_playerNames) {
-				if (actorId == mpLevelHandler->_lastSpawnedActorId) {
+				if (actorId == mpLevelHandler->_lastSpawnedActorId || playerName.IsSpectating) {
 					continue;
 				}
 				auto it = mpLevelHandler->_remoteActors.find(actorId);
 				if (it != mpLevelHandler->_remoteActors.end()) {
-					drawPlayerDot(it->second->GetPos(), actorId, false, playerName.Team);
+					drawPlayerDot(it->second->GetPos(), actorId, isSpectating && actorId == followedActorId, playerName.Team);
 				}
 			}
+		}
+
+		if (isSpectating && followedActorId == MpLevelHandler::SpectateFreeCamera) {
+			drawCameraMarker(player->GetPos());
 		}
 	}
 

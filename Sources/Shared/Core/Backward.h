@@ -4607,6 +4607,40 @@ namespace Death { namespace Backward {
 #		warning "Unsupported CPU architecture"
 #	endif
 
+			// A SIGSEGV/SIGBUS whose faulting address is the instruction pointer itself is an instruction fetch
+			// fault - the code jumped somewhere unmapped, typically through a null or dangling function pointer
+			// (an empty `Function<>`, a stale vtable, ...). There is no code at that address to unwind from, so
+			// `_Unwind_Backtrace` stops right there and the trace ends with a lone "0x00000000" frame that names
+			// no caller. A `call` has already pushed its return address, so "return" from the bad target by hand:
+			// resume unwinding at the caller, with the stack pointer as it was before the call. The kernel keeps
+			// the signal frame's registers in this very `ucontext_t`, so patching it here is what the unwinder
+			// sees when it walks through the sigreturn trampoline. (The libunwind variant of
+			// StackTrace::LoadHere() does the same thing on its own, this one uses `_Unwind_Backtrace`.)
+			if ((sig == SIGSEGV || sig == SIGBUS) && (errorAddr == nullptr || errorAddr == info->si_addr)) {
+#	if defined(REG_RIP)		// 64-bit x86
+				greg_t sp = uctx->uc_mcontext.gregs[REG_RSP];
+				if (sp != 0 && (sp % sizeof(greg_t)) == 0) {
+					uctx->uc_mcontext.gregs[REG_RIP] = *reinterpret_cast<greg_t*>(sp);
+					uctx->uc_mcontext.gregs[REG_RSP] = sp + sizeof(greg_t);
+					errorAddr = reinterpret_cast<void*>(uctx->uc_mcontext.gregs[REG_RIP]);
+				}
+#	elif defined(REG_EIP)	// 32-bit x86
+				greg_t sp = uctx->uc_mcontext.gregs[REG_ESP];
+				if (sp != 0 && (sp % sizeof(greg_t)) == 0) {
+					uctx->uc_mcontext.gregs[REG_EIP] = *reinterpret_cast<greg_t*>(sp);
+					uctx->uc_mcontext.gregs[REG_ESP] = sp + sizeof(greg_t);
+					errorAddr = reinterpret_cast<void*>(uctx->uc_mcontext.gregs[REG_EIP]);
+				}
+#	elif defined(__arm__)
+				// The link register still holds the return address of the failed branch
+				uctx->uc_mcontext.arm_pc = uctx->uc_mcontext.arm_lr;
+				errorAddr = reinterpret_cast<void*>(uctx->uc_mcontext.arm_pc);
+#	elif defined(__aarch64__) && !defined(DEATH_TARGET_APPLE)
+				uctx->uc_mcontext.pc = uctx->uc_mcontext.regs[30];
+				errorAddr = reinterpret_cast<void*>(uctx->uc_mcontext.pc);
+#	endif
+			}
+
 			if (errorAddr != nullptr) {
 				st.LoadFrom(errorAddr, 32, reinterpret_cast<void*>(uctx), info->si_addr);
 			} else {

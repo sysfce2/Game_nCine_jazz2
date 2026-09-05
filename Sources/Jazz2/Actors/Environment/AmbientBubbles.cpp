@@ -1,5 +1,6 @@
 ﻿#include "AmbientBubbles.h"
 #include "../../ILevelHandler.h"
+#include "../../PreferencesCache.h"
 #include "../../Tiles/TileMap.h"
 
 #include "../../../nCine/Base/Random.h"
@@ -30,6 +31,12 @@ namespace Jazz2::Actors::Environment
 
 	void AmbientBubbles::OnUpdate(float timeMult)
 	{
+		// Bubbles are created as debris, so they would be discarded by the tilemap anyway - bail out before the
+		// timers advance to skip the randomization and the per-bubble setup as well
+		if (PreferencesCache::Particles == ParticleQuality::Off) {
+			return;
+		}
+
 		_cooldown -= timeMult;
 		if (_cooldown <= 0.0f) {
 			SpawnBubbles(_bubblesLeft);

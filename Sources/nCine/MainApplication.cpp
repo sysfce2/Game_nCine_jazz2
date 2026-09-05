@@ -554,9 +554,11 @@ namespace nCine
 #else
 		while (!app._shouldQuit) {
 			app.ProcessStep();
-#	if defined(DEATH_TARGET_PSP) || defined(DEATH_TARGET_VITA)
+#	if defined(DEATH_TARGET_3DS) || defined(DEATH_TARGET_PSP) || defined(DEATH_TARGET_VITA)
 			// The IME is modal to the firmware but not to the game, which keeps running and presenting behind
-			// it - so its result has to be collected from the frame loop rather than from whoever opened it
+			// it - so its result has to be collected from the frame loop rather than from whoever opened it.
+			// On the 3DS the keyboard is run from here in the first place: the applet blocks the thread, and
+			// this is the one point where no frame is in flight (see ShowScreenKeyboard)
 			app.UpdateScreenKeyboard();
 #	endif
 #	if defined(DEATH_TARGET_WII) || defined(DEATH_TARGET_GAMECUBE)
@@ -831,11 +833,67 @@ namespace nCine
 		_imeOnCompleted = {};
 		sceImeDialogTerm();
 	}
+#elif defined(DEATH_TARGET_3DS)
+	void MainApplication::UpdateScreenKeyboard()
+	{
+		if (!_swkbdPending) {
+			return;
+		}
+		_swkbdPending = false;
+
+		// The frame has been presented (ProcessStep() is done) and the next one has not been begun, which is
+		// where citro3d wants a library applet run: swkbdInputText() hands both screens to the system's
+		// keyboard applet and returns once the user closes it, the game paused underneath for the duration.
+		// The applet takes UTF-8 in and gives UTF-8 back, so there is no encoding to do here; its length
+		// limit counts characters, the buffer counts bytes.
+		SwkbdState swkbd;
+		swkbdInit(&swkbd, SWKBD_TYPE_NORMAL, 2, std::int32_t(ImeMaxTextLength));
+		swkbdSetFeatures(&swkbd, SWKBD_DARKEN_TOP_SCREEN);
+		swkbdSetValidation(&swkbd, SWKBD_ANYTHING, 0, 0);
+		swkbdSetHintText(&swkbd, "Enter text");
+		swkbdSetButton(&swkbd, SWKBD_BUTTON_LEFT, "Cancel", false);
+		swkbdSetButton(&swkbd, SWKBD_BUTTON_RIGHT, "OK", true);
+		// Seed the editor with what the field already holds, so the user edits it instead of retyping it
+		if (!_swkbdInitialText.empty()) {
+			swkbdSetInitialText(&swkbd, String::nullTerminatedView(_swkbdInitialText).data());
+		}
+
+		char buffer[ImeMaxTextLength * 4 + 1] {};
+		const SwkbdButton button = swkbdInputText(&swkbd, buffer, sizeof(buffer));
+		// The applet read the pad itself, and the press that closed it is usually still held
+		Backends::CtrInputManager::discardInputUntilReleased();
+
+		if (button == SWKBD_BUTTON_CONFIRM) {
+			const StringView text = buffer;
+			if (_imeOnCompleted) {
+				// The caller can take the whole string, which is what the dialog actually collected - the
+				// field is replaced rather than appended to
+				_imeOnCompleted(text);
+			} else if (IInputEventHandler* handler = IInputManager::handler()) {
+				// Nobody asked for the string, so it is delivered as the text input events a keystroke-feeding
+				// keyboard would have produced. That appends, which is the best this fallback can do.
+				TextInputEvent textInputEvent;
+				for (std::size_t i = 0; i < text.size(); ) {
+					auto [codePoint, nextI] = Death::Utf8::NextChar(text, i);
+					i = nextI;
+					textInputEvent.length = (std::int32_t)Death::Utf8::FromCodePoint(codePoint, textInputEvent.text);
+					if (textInputEvent.length > 0) {
+						handler->OnTextInput(textInputEvent);
+					}
+				}
+			}
+		} else if (button == SWKBD_BUTTON_NONE) {
+			LOGW("The software keyboard closed without a result ({})", std::int32_t(swkbdGetResult(&swkbd)));
+		}
+
+		_imeOnCompleted = {};
+		_swkbdInitialText = {};
+	}
 #endif
 
 	bool MainApplication::CanShowScreenKeyboard()
 	{
-#if defined(DEATH_TARGET_WINDOWS) || defined(DEATH_TARGET_PSP) || defined(DEATH_TARGET_VITA)
+#if defined(DEATH_TARGET_WINDOWS) || defined(DEATH_TARGET_3DS) || defined(DEATH_TARGET_PSP) || defined(DEATH_TARGET_VITA)
 		return true;
 #else
 		return false;
@@ -849,6 +907,10 @@ namespace nCine
 		return (status == PSP_UTILITY_DIALOG_INIT || status == PSP_UTILITY_DIALOG_VISIBLE);
 #elif defined(DEATH_TARGET_VITA)
 		return (sceImeDialogGetStatus() == SCE_COMMON_DIALOG_STATUS_RUNNING);
+#elif defined(DEATH_TARGET_3DS)
+		// While the applet is actually up nothing in the game runs to ask; what can be observed is the request
+		// waiting for the end of the frame
+		return _swkbdPending;
 #elif defined(DEATH_TARGET_WINDOWS)
 		HWND hwnd = ::FindWindowEx(NULL, NULL, L"IPTip_Main_Window", NULL);
 		return (hwnd != NULL && ::IsWindowVisible(hwnd));
@@ -859,7 +921,7 @@ namespace nCine
 
 	bool MainApplication::ToggleScreenKeyboard()
 	{
-#if defined(DEATH_TARGET_PSP) || defined(DEATH_TARGET_VITA)
+#if defined(DEATH_TARGET_3DS) || defined(DEATH_TARGET_PSP) || defined(DEATH_TARGET_VITA)
 		return (IsScreenKeyboardVisible() ? HideScreenKeyboard() : ShowScreenKeyboard());
 #elif defined(DEATH_TARGET_WINDOWS)
 		if (HideScreenKeyboard()) {
@@ -940,6 +1002,19 @@ namespace nCine
 			return false;
 		}
 		_oskActive = true;
+		return true;
+#elif defined(DEATH_TARGET_3DS)
+		// libctru's software keyboard is a library applet: swkbdInputText() takes both screens over and blocks
+		// the calling thread until the dialog is closed, and it must not be run while a citro3d frame is open.
+		// A request arrives from a menu widget in the middle of a frame, so it is only noted here and run by
+		// UpdateScreenKeyboard() once the frame has been presented - the same collect-later shape as the two
+		// Sony dialogs, with the modal part moved to the other end.
+		if (_swkbdPending) {
+			return false;
+		}
+		_swkbdInitialText = initialText;
+		_imeOnCompleted = std::move(onCompleted);
+		_swkbdPending = true;
 		return true;
 #elif defined(DEATH_TARGET_VITA)
 		// The console has no keyboard overlay that feeds keystrokes the way the desktop ones do - what it has
@@ -1049,6 +1124,15 @@ namespace nCine
 		// Nothing is collected from a dialog shut down this way: the result reads as cancelled
 		_oskData.result = PSP_UTILITY_OSK_RESULT_CANCELLED;
 		return (sceUtilityOskShutdownStart() >= 0);
+#elif defined(DEATH_TARGET_3DS)
+		// Only a keyboard that has not been run yet can be taken back; the applet itself is closed by the user
+		if (!_swkbdPending) {
+			return false;
+		}
+		_swkbdPending = false;
+		_imeOnCompleted = {};
+		_swkbdInitialText = {};
+		return true;
 #elif defined(DEATH_TARGET_VITA)
 		if (sceImeDialogGetStatus() != SCE_COMMON_DIALOG_STATUS_RUNNING) {
 			return false;

@@ -278,6 +278,37 @@ namespace Jazz2::Multiplayer
 		bool IsSpectating();
 		/** @brief Returns `true` if spectate mode is enabled by the server */
 		bool IsSpectateAvailable() const;
+
+		/** @brief Actor ID reported by @ref GetSpectateFollowActorId() when the spectator flies the camera itself */
+		static constexpr std::uint32_t SpectateFreeCamera = UINT32_MAX;
+
+		/** @brief Returns the actor ID of the player the local spectator follows, or @ref SpectateFreeCamera */
+		std::uint32_t GetSpectateFollowActorId() const {
+			return _spectateFollowActorId;
+		}
+		/** @brief Returns the name of the player the local spectator follows, or an empty view when free-flying */
+		StringView GetSpectateFollowPlayerName() const;
+		/** @brief Returns the team of the player the local spectator follows, or 0 when free-flying */
+		std::uint8_t GetSpectateFollowPlayerTeam() const;
+		/**
+		 * @brief Returns the position of the player the local spectator follows
+		 *
+		 * If that player is gone - disconnected, finished the race or turned spectator itself - the camera moves on
+		 * to the next player instead of being left behind where they were, and only returns `false` (handing the
+		 * camera back to the spectator) when nobody is left to watch.
+		 */
+		bool GetSpectateFollowPlayerPos(Vector2f& pos);
+		/**
+		 * @brief Moves the local spectator to the next/previous player to follow
+		 *
+		 * The free camera is one step of the cycle (right after the last player), so a single button can start
+		 * following, step through everyone and drop back to flying the camera by hand.
+		 *
+		 * @param direction  @cpp 1 @ce for the next player, @cpp -1 @ce for the previous one
+		 */
+		void CycleSpectateFollow(std::int32_t direction);
+		/** @brief Stops following and hands the camera back to the spectator */
+		void StopSpectateFollow();
 		/** @brief Shows the in-game lobby so the local player can (re)select a character, (re)joining the game on confirmation */
 		void ShowCharacterSelectLobby();
 
@@ -391,6 +422,7 @@ namespace Jazz2::Multiplayer
 			std::uint8_t Flags;
 			std::uint32_t FurColor;
 			std::uint8_t Team;
+			bool IsSpectating;		// Synced separately (PlayerPropertyType::Spectate), spectators are not drawn or followed
 		};
 
 		struct PlayerPositionInRound {
@@ -502,6 +534,7 @@ namespace Jazz2::Multiplayer
 		bool _raceCheckpointsOrdered;								// Whether _orderedRaceCheckpoints come from authored waypoints (trusted for progress-based ranking)
 		SmallVector<PendingSfx, 0> _pendingSfx;
 		std::uint32_t _lastSpawnedActorId;	// Server: last assigned actor/player ID, Client: ID assigned by server
+		std::uint32_t _spectateFollowActorId;	// Local only: actor ID the local spectator follows, or SpectateFreeCamera
 		std::int32_t _waitingForPlayerCount;	// Client: number of players needed to start the game
 		std::uint32_t _lastUpdated; // Server/Client: last update from the server
 		std::uint64_t _seqNumWarped; // Client: set to _seqNum from HandlePlayerWarped() when warped
@@ -540,6 +573,12 @@ namespace Jazz2::Multiplayer
 		std::uint8_t FindFreePlayerId();
 		std::int32_t GetNonSpectatePlayerCount();
 		bool IsLocalPlayer(Actors::ActorBase* actor);
+		/** @brief Collects the actor IDs of the players the local spectator can follow, in a stable (ascending) order */
+		void CollectSpectateFollowCandidates(SmallVector<std::uint32_t, 0>& candidates) const;
+		/** @brief Returns the position of the specified player, or `false` if it isn't there to be followed */
+		bool TryGetSpectatablePlayerPos(std::uint32_t actorId, Vector2f& pos) const;
+		/** @brief Broadcasts the spectate state of the specified player to every synchronized peer but its owner */
+		void BroadcastPlayerSpectateState(const Actors::Multiplayer::MpPlayer* player);
 		void ApplyGameModeToAllPlayers(MpGameMode gameMode);
 		void ApplyGameModeToPlayer(MpGameMode gameMode, Actors::Player* player);
 		std::uint8_t GetTeamCount() const override;

@@ -163,6 +163,7 @@
 	#define restrict __restrict
 	#include <netdb.h>
 	#undef restrict
+	#include <psp2/net/net.h>	// sceNetErrnoLoc()
 	#else
 	#include <netdb.h>
 	#endif
@@ -6239,6 +6240,11 @@ extern "C" {
 #endif
 #endif
 		}
+#if defined(DEATH_TARGET_VITA)
+		if (result == -1) {
+			LOGW("enet_socket_set_option({}, {}) failed with errno {} (socket error 0x{:.8x})", (int)option, value, errno, (unsigned int)*sceNetErrnoLoc());
+		}
+#endif
 		return (result == -1 ? -1 : 0);
 	} /* enet_socket_set_option */
 
@@ -6453,7 +6459,7 @@ extern "C" {
 		}
 
 		return sentLength;
-#elif defined(DEATH_TARGET_3DS) || defined(DEATH_TARGET_PSP)
+#elif defined(DEATH_TARGET_3DS) || defined(DEATH_TARGET_PSP) || defined(DEATH_TARGET_VITA)
 		// libctru's socket layer spells neither sendmsg() nor recvmsg() (see enet_socket_receive), only
 		// sendto(): the buffers - ENet hands the protocol header and the commands over as separate ones - are
 		// gathered into one datagram first. The stack copy is bounded by the MTU, which is the most the protocol
@@ -6461,6 +6467,11 @@ extern "C" {
 		// The PSP has sendmsg(), but pspdev's libcglue wrapper of it returns 0 on success instead of the byte
 		// count (its sendto() wrapper returns the count), so every send looked like "nothing sent" - the
 		// discovery request reported a failure for a packet that had left, and the traffic counters stayed 0.
+		// The Vita has sendmsg() too, but sceNetSendmsg() caps the number of iovecs well below ENet's
+		// ENET_BUFFER_MAXIMUM (65): a datagram of 33 buffers came back EMSGSIZE (SCE_NET_ERROR 0x28), which
+		// happens exactly when a burst of reliable commands is acknowledged at once - right after a level is
+		// ready - and ENet treats a failed send as a dead connection, so the client dropped out seconds into
+		// every match. Measured on hardware, 2026-09-05.
 		struct sockaddr_in sin;
 		unsigned char datagram[ENET_PROTOCOL_MAXIMUM_MTU];
 		size_t total = 0, i;
@@ -6484,9 +6495,13 @@ extern "C" {
 			if (errno == EWOULDBLOCK || errno == ENOBUFS) {
 				return 0;
 			}
-			#ifdef ENET_DEBUG
+#if defined(DEATH_TARGET_VITA)
+			// A failed send ends the connection (see enet_protocol_send_outgoing_commands), so the firmware's
+			// own error code is worth a line - the trace log is the only debugging channel on this console
+			LOGW("enet_socket_send() failed with errno {} (socket error 0x{:.8x}, {} bytes)", errno, (unsigned int)*sceNetErrnoLoc(), (unsigned int)total);
+#elif defined(ENET_DEBUG)
 			LOGW("enet_socket_send() failed with error {}", errno);
-			#endif
+#endif
 			return -1;
 		}
 		return sentLength;
@@ -6621,6 +6636,9 @@ extern "C" {
 				case EMSGSIZE:
 					return -2;
 			}
+#if defined(DEATH_TARGET_VITA)
+			LOGW("enet_socket_receive() failed with errno {} (socket error 0x{:.8x})", errno, (unsigned int)*sceNetErrnoLoc());
+#endif
 			return -1;
 		}
 

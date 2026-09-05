@@ -154,6 +154,13 @@ namespace Jazz2::UI
 		virtual void OnDrawHealth(const Rectf& view, const Rectf& adjustedView, Actors::Player* player);
 		/** @brief Called when score of the player needs to be drawn */
 		virtual void OnDrawScore(const Rectf& view, Actors::Player* player);
+		/**
+		 * @brief Called instead of health/score/ammo when the player is in @ref PlayerType::Spectate mode
+		 *
+		 * A spectator has no health, weapons or score of its own, but the parts of the HUD that describe the round
+		 * itself still apply - multiplayer draws the leaderboard and the minimap here.
+		 */
+		virtual void OnDrawSpectate(const Rectf& view, const Rectf& adjustedView, Actors::Player* player);
 		/** @brief Called when weapon ammo of the player needs to be drawn */
 		virtual void OnDrawWeaponAmmo(const Rectf& adjustedView, Actors::Player* player);
 		/** @brief Called when health of the active boss needs to be drawn */

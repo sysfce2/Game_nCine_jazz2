@@ -72,13 +72,17 @@ namespace Jazz2::UI
 
 		_carretAnim += timeMult;
 
-#if defined(DEATH_TARGET_ANDROID)
-		if (_isVisible) {
-			// The on-screen keyboard can also be dismissed by the user, so follow the reported state instead
-			// of assuming it stays shown until the game hides it
+#if !defined(DEATH_TARGET_WINDOWS)
+		if (_isVisible && theApplication().CanShowScreenKeyboard()) {
+			// The on-screen keyboard can also be dismissed by the user, and the consoles' modal IME closes itself
+			// as soon as the text is confirmed, so follow the reported state instead of assuming it stays shown
+			// until the game hides it. Windows reports the state of a system window that takes a moment to show
+			// up after it was asked for, so there the flag stays driven by our own calls.
 			_keyboardVisible = theApplication().IsScreenKeyboardVisible();
 		}
+#endif
 
+#if defined(DEATH_TARGET_ANDROID)
 		if (_isVisible && _keyboardVisible) {
 			_recalcVisibleBoundsTimeLeft -= timeMult;
 			if (_recalcVisibleBoundsTimeLeft <= 0.0f) {
@@ -442,7 +446,9 @@ namespace Jazz2::UI
 			return;
 		}
 
-		if (_keyboardVisible) {
+		// Not Application::ToggleScreenKeyboard(): its show side takes no field to seed from and no callback to
+		// hand the result to, so a reopen came up empty and then appended what was typed to the line already there
+		if (theApplication().IsScreenKeyboardVisible()) {
 			theApplication().HideScreenKeyboard();
 			_keyboardVisible = false;
 		} else {

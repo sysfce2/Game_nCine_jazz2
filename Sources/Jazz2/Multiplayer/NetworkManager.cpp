@@ -256,14 +256,14 @@ namespace Jazz2::Multiplayer
 				if (pair.second->RemotePeer) {
 					auto address = NetworkManagerBase::AddressToString(pair.second->RemotePeer);
 					if (_serverConfig->BannedIPAddresses.contains(address)) {
-						LOGW("Peer kicked \"{}\" ({}): Banned by IP address", pair.second->PlayerName, address);
+						LOGW("Peer kicked \"{}\" [{}] ({}): Banned by IP address", pair.second->PlayerName, pair.second->RemotePeer, address);
 						peersToKick.push_back(pair.second->RemotePeer);
 						continue;
 					}
 
 					auto uniquePlayerId = UuidToString(pair.second->UniquePlayerID);
 					if (_serverConfig->BannedUniquePlayerIDs.contains(uniquePlayerId)) {
-						LOGW("Peer kicked \"{}\" ({}): Banned by unique player ID", pair.second->PlayerName, address);
+						LOGW("Peer kicked \"{}\" [{}] ({}): Banned by unique player ID", pair.second->PlayerName, pair.second->RemotePeer, address);
 						peersToKick.push_back(pair.second->RemotePeer);
 						continue;
 					}
@@ -954,7 +954,7 @@ namespace Jazz2::Multiplayer
 		if (isListening) {
 			auto address = AddressToString(peer);
 			if (_serverConfig->BannedIPAddresses.contains(address)) {
-				LOGI("Peer kicked \"<unknown>\" ({}): Banned by IP address", address);
+				LOGI("Peer kicked \"<unknown>\" [{}] ({}): Banned by IP address", peer, address);
 				return Reason::Banned;
 			}
 		}

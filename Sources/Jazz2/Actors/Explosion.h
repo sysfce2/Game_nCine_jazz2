@@ -44,7 +44,12 @@ namespace Jazz2::Actors
 		/** @brief Creates a new instance */
 		Explosion();
 
-		/** @brief Spawns an explosion effect of a given type at a given position */
+		/**
+			@brief Spawns an explosion effect of a given type at a given position
+			
+			Smoke variants are decorative only and are skipped entirely when @ref PreferencesCache::Particles
+			is set to @ref ParticleQuality::Off.
+		*/
 		static void Create(ILevelHandler* levelHandler, const Vector3i& pos, Type type, float scale = 1.0f);
 
 	protected:

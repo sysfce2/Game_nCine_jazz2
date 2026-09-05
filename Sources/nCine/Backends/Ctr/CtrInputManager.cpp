@@ -52,6 +52,7 @@ namespace nCine::Backends
 	}
 
 	bool CtrInputManager::_connected = false;
+	bool CtrInputManager::_discardUntilReleased = false;
 	CtrJoystickState CtrInputManager::_state;
 
 	CtrJoystickState::CtrJoystickState()
@@ -225,6 +226,11 @@ namespace nCine::Backends
 		return false;
 	}
 
+	void CtrInputManager::discardInputUntilReleased()
+	{
+		_discardUntilReleased = true;
+	}
+
 	void CtrInputManager::updateJoystickStates()
 	{
 		if (!_connected) {
@@ -232,7 +238,14 @@ namespace nCine::Backends
 		}
 
 		hidScanInput();
-		const std::uint32_t held = hidKeysHeld();
+		std::uint32_t held = hidKeysHeld();
+		if (_discardUntilReleased) {
+			if (held == 0) {
+				_discardUntilReleased = false;
+			} else {
+				held = 0;
+			}
+		}
 
 		// The buttons under the console's own labels (A on the right, B at the bottom, X on top, Y on the
 		// left), SELECT as Back and START as Start; there is no Guide button and no stick buttons

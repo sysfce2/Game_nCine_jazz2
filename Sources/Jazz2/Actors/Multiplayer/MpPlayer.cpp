@@ -24,6 +24,41 @@ namespace Jazz2::Actors::Multiplayer
 		async_return success;
 	}
 
+	void MpPlayer::OnHandleSpectate(float timeMult)
+	{
+		auto* mpLevelHandler = static_cast<Jazz2::Multiplayer::MpLevelHandler*>(_levelHandler);
+
+		// Only the spectator sitting in front of this screen drives its own camera; the server-side shadow of a
+		// remote spectator gets its position from the owning client like any other remote player
+		if (!mpLevelHandler->IsLocalPlayer(this)) {
+			Player::OnHandleSpectate(timeMult);
+			return;
+		}
+
+		Vector2f followedPos;
+		if (_levelHandler->PlayerActionHit(this, PlayerAction::Fire)) {
+			mpLevelHandler->CycleSpectateFollow(1);
+		} else if (mpLevelHandler->GetSpectateFollowPlayerPos(followedPos)) {
+			// While locked onto a player the movement keys aren't flying the camera, so they step between players
+			if (_levelHandler->PlayerActionHit(this, PlayerAction::Right)) {
+				mpLevelHandler->CycleSpectateFollow(1);
+			} else if (_levelHandler->PlayerActionHit(this, PlayerAction::Left)) {
+				mpLevelHandler->CycleSpectateFollow(-1);
+			} else if (_levelHandler->PlayerActionHit(this, PlayerAction::Run)) {
+				mpLevelHandler->StopSpectateFollow();
+			}
+		}
+
+		if (mpLevelHandler->GetSpectateFollowPlayerPos(followedPos)) {
+			// Snap the (invisible, collision-less) spectator onto the followed player - the camera targets this
+			// actor, so it cuts over to the new player the same way a broadcast camera would
+			_pos = followedPos;
+			return;
+		}
+
+		Player::OnHandleSpectate(timeMult);
+	}
+
 	std::shared_ptr<PeerDescriptor> MpPlayer::GetPeerDescriptor()
 	{
 		return _peerDesc;

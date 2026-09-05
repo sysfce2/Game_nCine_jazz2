@@ -9,7 +9,8 @@ namespace Jazz2::Actors::Environment
 		
 		Decorative emitter that releases streams of rising bubbles, used in underwater
 		sections to give submerged areas life. Purely cosmetic---the bubbles drift upward
-		and fade away without affecting gameplay.
+		and fade away without affecting gameplay, so nothing is emitted when
+		@ref PreferencesCache::Particles is set to @ref ParticleQuality::Off.
 	*/
 	class AmbientBubbles : public ActorBase
 	{

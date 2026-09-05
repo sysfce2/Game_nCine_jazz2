@@ -1007,7 +1007,18 @@ game writes. Two renderer notes for the emulator:
     texture is RGBA4 or RGB565; the lightmap is quantized to 4 bits per channel as well. The
     resulting banding is the console's, not the port's.
 -   **The frame is one 400x240 view** on the top screen, without stereoscopic 3D, and nothing is drawn
-    on the bottom screen but the console. There is no rendering-resolution option.
+    on the bottom screen but the console. There is no rendering-resolution option. The **"Sample Rate"**
+    option in Options > Sounds is there, as on the PSP: the mixer's cost is linear in the rate, and the
+    DSP resamples the channel to its own 32728 Hz whatever it is, so the presets run up to that.
+-   **Text is entered through the system's software keyboard.** libctru's `swkbd` is a library applet: it
+    takes both screens over, reads the pad itself and blocks the thread it is called on until the dialog
+    closes, and it must not run while a citro3d frame is open. `MainApplication::ShowScreenKeyboard()`
+    therefore only notes the request, and `UpdateScreenKeyboard()` runs the applet from the frame loop
+    once the frame has been presented --- the game pauses underneath for the duration --- then hands the
+    edited string back to the field that asked for it (a player name, a highscore entry, a server
+    address), the same replace-not-append contract the PSP's and the Vita's dialogs follow. The press
+    that closes the applet is still held when the game resumes, so the input backend reports the pad as
+    idle until every button has been released once.
 -   **A mid-frame clear splits the command list.** `C3D_RenderTargetClear()` is a memory fill the
     GPU's transfer engine runs, not a command in the list, so the device calls `C3D_FrameSplit()`
     before it @m_span{m-text m-dim} (see @cpp PicaDevice::Clear() @ce) @m_endspan or the fill would
@@ -1926,12 +1937,24 @@ shaders are not interchangeable @m_span{m-text m-dim} (`Colorized` desaturates a
     @cpp "if (!inet_pton(...)) return -1;" @ce, accepts an address it never parsed. Replacing the function
     fixes both --- see @cpp "Sources/nCine/Backends/Vita/VitaLibcCompat.cpp" @ce. Until it was, the update
     check and the public server list had been failing here for the same reason.
+-   **@cpp "sceNetSendmsg()" @ce caps the number of iovecs**, well below the 65 buffers ENet may hand
+    over for one datagram @m_span{m-text m-dim} (the protocol header plus two per command) @m_endspan. A
+    send of 33 buffers came back `EMSGSIZE` @m_span{m-text m-dim} (SCE error 0x28) @m_endspan, which
+    happens exactly when a burst of reliable commands is acknowledged at once --- right after a level
+    reports itself ready --- and ENet treats a failed send as a dead connection, so the client dropped
+    out of every match a second or two after joining, with nothing in the log but
+    @cpp "enet_host_service() returned -1" @ce. The Vita therefore takes the same gather-then-
+    @cpp "sendto()" @ce arm as the 3DS and the PSP; the copy is bounded by the MTU. The Vita arms also
+    log `errno` together with @cpp "*sceNetErrnoLoc()" @ce when a send, receive or socket option fails,
+    since the trace log is the only debugging channel on the console. Measured on hardware, 2026-09-05.
 -   The rest of the sockets API needs nothing: VitaSDK provides @cpp "poll()" @ce,
     @cpp "getaddrinfo()" @ce, @cpp "setsockopt()" @ce and @cpp "recvmsg()" @ce natively, its
     @cpp "SceNetMsghdr" @ce and @cpp "sockaddr_in" @ce are byte-identical to newlib's, and the network
     stack needs no explicit bring-up --- newlib calls @cpp "_vita_net_init()" @ce lazily from
     @cpp "socket()" @ce and the resolver entry points, which is why there is no counterpart here to the
-    PSP's `PspNetwork::Initialize()`.
+    PSP's `PspNetwork::Initialize()`. That pool is small, though --- @cpp "malloc(0x23114)" @ce, about
+    140 KB, against the 256 KB send and receive buffers ENet asks for --- and while the option calls do
+    not fail today, it is the first thing to suspect if the transport ever runs out of buffers.
 -   **The frame is rendered smaller than the panel, and the user picks how much smaller.** The `GXM`
     backend renders the whole frame --- scene, upscale pass and UI --- into an intermediate screen surface
     that @ref nCine::RHI::GXM::GxmDevice::PresentFrame() stretches onto the 960x544 panel, so a smaller

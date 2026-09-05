@@ -2,7 +2,7 @@
 #include "../../PreferencesCache.h"
 
 #include "../../../nCine/I18n.h"
-#if defined(WITH_PSPAUDIO) || defined(WITH_AHIAUDIO)
+#if defined(WITH_PSPAUDIO) || defined(WITH_NDSP) || defined(WITH_AHIAUDIO)
 #	include "../../../nCine/ServiceLocator.h"
 #	include "../../../nCine/Audio/IAudioDevice.h"
 #endif
@@ -18,7 +18,7 @@ namespace Jazz2::UI::Menu
 			_isDirty = false;
 			PreferencesCache::Save();
 		}
-#if defined(WITH_PSPAUDIO) || defined(WITH_AHIAUDIO)
+#if defined(WITH_PSPAUDIO) || defined(WITH_NDSP) || defined(WITH_AHIAUDIO)
 		if (_sampleRateChanged && _root != nullptr) {
 			// The mixer already runs at the new rate, but a stream that was open keeps decoding at the one it
 			// was opened with (the mixer resamples it, so it plays at the right pitch, only at the old cost).
@@ -40,8 +40,12 @@ namespace Jazz2::UI::Menu
 
 		SetTitle(_("Sounds"));
 
-		auto list = std::make_unique<StackLayout>();
-		list->Spread = true;
+		// A ScrollView rather than a spread-out StackLayout: with the sample-rate row the list no longer fits the
+		// 240-row panels (the 3DS, the PSP), and a StackLayout would crop it rather than scroll
+		auto list = std::make_unique<ScrollView>();
+		// The last row shows its value under the label, which reaches the row's bottom edge; a little more room
+		// after it than the default keeps the value off the frame when the list is scrolled to its end
+		list->ContentPadding = 24.0f;
 
 		// TRANSLATORS: Menu item in Options > Sounds section
 		list->Add<Slider>(_("Master Volume"),
@@ -68,12 +72,13 @@ namespace Jazz2::UI::Menu
 				_isDirty = true;
 			});
 
-#if defined(WITH_PSPAUDIO) || defined(WITH_AHIAUDIO)
+#if defined(WITH_PSPAUDIO) || defined(WITH_NDSP) || defined(WITH_AHIAUDIO)
 		// Only the software-mixing consoles have a mixing rate to trade for CPU time (the mixer's cost is linear
 		// in it, and so is the module decoder's, which renders at the device's rate): the PSP mixes at half or a
-		// quarter of its hardware's 44100 Hz (see PspAudioDevice), the Amiga at whatever AHI resamples from. The
-		// change applies to the effects at once; the music is reopened at the new rate when the section is left
-		// (see the destructor).
+		// quarter of its hardware's 44100 Hz (see PspAudioDevice), the 3DS at any rate its DSP then resamples to
+		// its own 32728 Hz (see NdspAudioDevice), the Amiga at whatever AHI resamples from. The change applies
+		// to the effects at once; the music is reopened at the new rate when the section is left (see the
+		// destructor).
 		// TRANSLATORS: Menu item in Options > Sounds section
 		auto* sampleRateItem = list->Add<ChoiceItem>(_("Sample Rate"),
 			[this]() -> StringView {
@@ -90,6 +95,10 @@ namespace Jazz2::UI::Menu
 				// 44100 Hz would only spend the CPU the whole option is there to save: the samples are 11-22 kHz
 				// and the module music is capped at 22050 Hz on this console regardless (see AudioLoaderMpt)
 				static const std::int32_t presets[] = { 11025, 22050 };
+#	elif defined(WITH_NDSP)
+				// The DSP outputs at 32728 Hz, so that is the most a mix can be heard at; mixing at 44100 Hz would
+				// spend CPU on samples the hardware resamples straight back down
+				static const std::int32_t presets[] = { 11025, 22050, 32728 };
 #	else
 				static const std::int32_t presets[] = { 11025, 22050, 44100 };
 #	endif

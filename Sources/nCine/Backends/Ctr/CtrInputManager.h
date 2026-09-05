@@ -75,9 +75,18 @@ namespace nCine::Backends
 
 		/** @brief Polls the HID service and dispatches the resulting joystick events (once per frame) */
 		static void updateJoystickStates();
+		/**
+			@brief Reports the pad as idle until every button has been released once
+
+			Called when a library applet that read the pad itself - the software keyboard - returns: the button
+			that closed it is usually still held, and would otherwise reach the game as a press on whatever sits
+			under the field the keyboard was opened for.
+		*/
+		static void discardInputUntilReleased();
 
 	private:
 		static bool _connected;
+		static bool _discardUntilReleased;
 		static CtrJoystickState _state;
 
 		// The state object dispatches through the protected shared _joyMapping/_inputEventHandler

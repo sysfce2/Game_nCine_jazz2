@@ -44,7 +44,7 @@ namespace nCine
 		String GetUserName() override;
 		bool OpenUrl(StringView url) override;
 		
-#if defined(DEATH_TARGET_VITA) || defined(DEATH_TARGET_PSP) || defined(DOXYGEN_GENERATING_OUTPUT)
+#if defined(DEATH_TARGET_3DS) || defined(DEATH_TARGET_PSP) || defined(DEATH_TARGET_VITA) || defined(DOXYGEN_GENERATING_OUTPUT)
 		/**
 			@brief Advances the on-screen keyboard, turning a finished IME dialog into text input events
 
@@ -53,6 +53,8 @@ namespace nCine
 			the text input the caller expected. Called once per frame from @ref Run(). The PSP's `sceUtility`
 			on-screen keyboard is the same kind of dialog and is driven the same way (its drawing is the one
 			part that lives elsewhere: the GU backend refreshes it at present time, see `GuDevice::PresentFrame()`).
+			The 3DS's software keyboard is a library applet that blocks the thread it is called on until the
+			dialog closes, so there this is where a keyboard asked for during the frame is actually run.
 		*/
 		void UpdateScreenKeyboard();
 #endif
@@ -78,6 +80,16 @@ namespace nCine
 		unsigned short _oskTitle[32];
 		/** Whether a keyboard opened by @ref ShowScreenKeyboard() has not been collected yet */
 		bool _oskActive = false;
+		/** Invoked with the finished string when the dialog is confirmed, see @ref ShowScreenKeyboard() */
+		Containers::Function<void(Containers::StringView)> _imeOnCompleted;
+#elif defined(DEATH_TARGET_3DS)
+		/** @brief Longest string the on-screen keyboard collects (a player name or a server address, not prose) */
+		static constexpr std::size_t ImeMaxTextLength = 256;
+
+		/** Whether a keyboard asked for by @ref ShowScreenKeyboard() is waiting for @ref UpdateScreenKeyboard() to run it */
+		bool _swkbdPending = false;
+		/** What the keyboard opens on, see @ref ShowScreenKeyboard() */
+		String _swkbdInitialText;
 		/** Invoked with the finished string when the dialog is confirmed, see @ref ShowScreenKeyboard() */
 		Containers::Function<void(Containers::StringView)> _imeOnCompleted;
 #elif defined(DEATH_TARGET_VITA)

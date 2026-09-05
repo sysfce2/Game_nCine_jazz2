@@ -586,6 +586,14 @@ namespace Jazz2::Actors
 		/** @brief Reduces remaining shield time when a hit is absorbed (only if more than @p time remains) */
 		virtual void DecreaseShieldTime(float time);
 
+		/**
+		 * @brief Called each frame while the player is in @ref PlayerType::Spectate mode
+		 *
+		 * The default implementation flies the (invisible) player around the level with the movement keys, which is
+		 * what the camera follows. Multiplayer overrides it to let the spectator lock onto another player instead.
+		 */
+		virtual void OnHandleSpectate(float timeMult);
+
 		/** @brief Called when a solid object is pushed */
 		virtual void OnPushSolidObject(float timeMult, float pushSpeedX);
 		/** @brief Called when a spring is hit */
@@ -635,7 +643,6 @@ namespace Jazz2::Actors
 		void HandleWeaponFire(bool areaWeaponAllowed);
 		void OnHandleWater();
 		void OnHandleAreaEvents(float timeMult, bool& areaWeaponAllowed, std::int32_t& areaWaterBlock);
-		void OnHandleSpectate(float timeMult);
 		void DoWarpOut(Vector2f pos, WarpFlags flags);
 		void InitialPoleStage(bool horizontal);
 		void NextPoleStage(bool horizontal, bool positive, std::int32_t stagesLeft, float lastSpeed);

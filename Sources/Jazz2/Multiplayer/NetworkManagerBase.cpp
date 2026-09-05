@@ -35,6 +35,8 @@
 #		include <pspthreadman.h>	// sceKernelChangeThreadPriority()
 #		include "../../nCine/Backends/Psp/PspNetwork.h"
 #	elif defined(DEATH_TARGET_VITA)
+#		include <cerrno>
+#		include <psp2/net/net.h>		// sceNetErrnoLoc()
 #		include <psp2/net/netctl.h>
 #	elif defined(DEATH_TARGET_3DS)
 #		include <unistd.h>		// gethostid()
@@ -1829,6 +1831,9 @@ namespace Jazz2::Multiplayer
 #if defined(DEATH_TARGET_PSP)
 						// The socket error behind it, which the firmware keeps separately from the C library's errno
 						LOGE("[MP] enet_host_service() returned {} (socket error {}, errno {})", result, sceNetInetGetErrno(), errno);
+#elif defined(DEATH_TARGET_VITA)
+						// The firmware's own error code (SCE_NET_ERROR_*), which newlib's wrappers map onto errno
+						LOGE("[MP] enet_host_service() returned {} (socket error 0x{:.8x}, errno {})", result, std::uint32_t(*sceNetErrnoLoc()), errno);
 #else
 						LOGE("[MP] enet_host_service() returned {}", result);
 #endif

@@ -57,6 +57,19 @@ namespace Jazz2::UI::Menu
 		bool Visible;
 		/** @brief Extra space a vertical layout leaves above the widget (in addition to @ref GetHeight()) */
 		float MarginTop = 0.0f;
+		/**
+			@brief How far the view is from the compact layout towards the full one (0 to 1, see @ref MenuLayout::GetTransition())
+
+			Set by the containing list before it measures its children each frame, so a row can size itself for
+			the view it is drawn in: the labelled rows (@ref Slider, @ref ChoiceItem) tighten up on a handheld's
+			240-row view, where their full-layout heights fit only two of them at a time.
+		*/
+		float LayoutTransition = 1.0f;
+
+		/** @brief Blends a metric between its compact and full layout values for the view the widget is drawn in */
+		float Blend(float compact, float full) const {
+			return compact + (full - compact) * LayoutTransition;
+		}
 
 		/**
 		 * @brief Distance of a row's label from the top of the row
@@ -65,6 +78,8 @@ namespace Jazz2::UI::Menu
 		 * it shows underneath below it, whatever its own height, so the first row of every section starts at
 		 * the same distance from the frame - it is also where a default-height @ref ListItem centers its text.
 		 * Rows used to center the label instead, which put a taller row's label visibly lower than a list's.
+		 * A row that tightens up on a compact view (see @ref LayoutTransition) moves its label up by a share
+		 * of the removed height, so it keeps step with the compact @ref ListItem rows, which center at 16.
 		 */
 		static constexpr float LabelOffset = 20.0f;
 
@@ -166,7 +181,8 @@ namespace Jazz2::UI::Menu
 		}
 
 		float GetHeight() const override {
-			return Height;
+			// The label and the value under it need 48 rows; the rest is air the compact view has none of
+			return Height - Blend(CompactReduction, 0.0f);
 		}
 		void OnUpdate(float timeMult) override;
 		void Draw(IMenuContainer* root, Canvas* canvas, const Rectf& bounds, std::int32_t& charOffset) override;
@@ -175,6 +191,11 @@ namespace Jazz2::UI::Menu
 		void OnSelected() override {
 			Animation.Restart(0.0f);
 		}
+
+	private:
+#ifndef DOXYGEN_GENERATING_OUTPUT
+		static constexpr float CompactReduction = 4.0f;
+#endif
 	};
 
 	/**
@@ -376,7 +397,8 @@ namespace Jazz2::UI::Menu
 		}
 
 		float GetHeight() const override {
-			return 70.0f;
+			// The label, the arrows and the bar need 50 rows; the full layout spreads them out with 20 more
+			return Blend(CompactHeight, FullHeight);
 		}
 		void OnUpdate(float timeMult) override;
 		void Draw(IMenuContainer* root, Canvas* canvas, const Rectf& bounds, std::int32_t& charOffset) override;
@@ -390,6 +412,8 @@ namespace Jazz2::UI::Menu
 #ifndef DOXYGEN_GENERATING_OUTPUT
 		static constexpr float StepSize = 0.03f;
 		static constexpr std::int32_t BlockCount = 33;
+		static constexpr float FullHeight = 70.0f;
+		static constexpr float CompactHeight = 50.0f;
 
 		float _pressedCooldown;
 		std::int32_t _pressedCount;
@@ -445,6 +469,8 @@ namespace Jazz2::UI::Menu
 
 		void MoveSelection(std::int32_t direction, IMenuContainer* root, bool playSound = true);
 		void SelectAt(std::int32_t index, IMenuContainer* root);
+		/** @brief Hands the view's layout transition to every child (see @ref Widget::LayoutTransition); called before the children are measured */
+		void UpdateLayoutTransition(IMenuContainer* root);
 		/** @brief Called when the selection moves, so a scrolling container can keep it visible */
 		virtual void OnSelectionMoved() {}
 		/** @brief Called when the selection is set programmatically, so a scrolling container can reveal it */

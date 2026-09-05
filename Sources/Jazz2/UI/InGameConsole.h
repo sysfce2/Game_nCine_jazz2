@@ -64,6 +64,8 @@ namespace Jazz2::UI
 		void Hide();
 		/** @brief Writes a line to the console history */
 		void WriteLine(MessageLevel level, String line);
+		/** @brief Shows or hides the on-screen keyboard for the current input line */
+		void ToggleScreenKeyboard();
 
 	private:
 		static constexpr std::uint16_t MainLayer = 100;
@@ -95,7 +97,6 @@ namespace Jazz2::UI
 		void GetNextCommandFromHistory();
 		void ScrollUp(std::int32_t amount);
 		void ScrollDown(std::int32_t amount);
-		void ToggleScreenKeyboard();
 		void ShowScreenKeyboardForInputLine();
 		void RecalcLayoutForScreenKeyboard();
 	};
